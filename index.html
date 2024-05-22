@@ -136,7 +136,7 @@
         state.cities.forEach(city => city.tick());
         state.transports.forEach(transport => transport.tick());
         
-        if (state.tick % 50 == 0)
+        if (state.tick % 40 == 0)
             addTreeInForest(randomElement(state.forests).position, Math.random() * INITIAL_FOREST_SIZE);
 
         // Remove delivered transports
@@ -150,10 +150,9 @@
 
     function maybeUpgradeStation (station) {
         if (Math.random() < 0.02) {
-            if (!isCity(station.position))
-                return addCity(station.position, 10);
-
-            getCity(station.position).size += 1;
+            let city = getCity(station.position);
+            if (!city) return;
+            city.size += 1;
         }
     }
 
@@ -528,9 +527,9 @@
     class City {
         constructor (position, size) {
             this.position = position;
-            this.requests = ["🌳", "🌳", "🌳"];
+            this.requests = ["🌳"];
             this.offers = [];
-            this.size = size || 100;
+            this.size = size || 50;
             this.name = CITY_NAMES[Math.floor(Math.random() * CITY_NAMES.length)];
         }
 
@@ -586,20 +585,24 @@
         }
 
         addRequests () {
-            if (this.requests.filter(r => r == "🌳").length < 5 && Math.random() < this.size / 20000)
+            if (this.requests.filter(r => r == "🌳").length < 9 && this.requestChance())
                 this.requests.push("🌳");
 
-            if (this.requests.filter(r => r == "💧").length < 5 && Math.random() < this.size / 40000 && this.size > 175)
+            if (this.requests.filter(r => r == "💧").length < 3 && this.requestChance() && this.size > 200)
                 this.requests.push("💧");
 
-            if (this.offers.filter(r => r == "🧑").length < 5 && Math.random() < this.size / 40000 && this.size > 300)
-                this.offers.push("🧑");
-
-            if (this.requests.filter(r => r == "🏔️").length < 5 && Math.random() < this.size / 40000 && this.size > 225)
+            if (this.requests.filter(r => r == "🏔️").length < 3 && this.requestChance() && this.size > 250)
                 this.requests.push("🏔️");
 
-            if (this.offers.filter(r => r == "⛷️").length < 5 && Math.random() < this.size / 40000 && this.size > 1000)
+            if (this.offers.filter(r => r == "🧑").length < 3 && this.requestChance() && this.size > 300)
+                this.offers.push("🧑");
+
+            if (this.offers.filter(r => r == "⛷️").length < 3 && this.requestChance() && this.size > 600)
                 this.offers.push("⛷️");
+        }
+
+        requestChance () {
+            return Math.random() < 0.005 * Math.log2(this.size) / 3;
         }
 
         deliver () {
@@ -689,8 +692,7 @@
         while (toCheck.length > 0) {
             var station = toCheck.shift();
             // Distance check cause original cityStation should not count
-            // Random because sometimes we just don't like a city
-            if (distance(station.position, position) > 1 && cityNearStation(station) && Math.random() < 0.5) return getPath(originalStation, station);
+            if (distance(station.position, position) > 1 && cityNearStation(station)) return getPath(originalStation, station);
             checked.add(station);
             toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
         }
@@ -909,8 +911,8 @@
     }
 
     // Add some water
-    for (let clusterX = 0; clusterX < 6; clusterX++) {
-        for (let clusterY = 0; clusterY < 6; clusterY++) {
+    for (let clusterX = 0; clusterX < 4; clusterX++) {
+        for (let clusterY = 0; clusterY < 4; clusterY++) {
             let clusterCenter = {
                 x: clusterX * 400 + Math.random() * 250,
                 y: clusterY * 400 + Math.random() * 250
