@@ -55,6 +55,7 @@
         snow: [],
         stations: [],
         transports: [],
+        forests: [],
         money: 400,
 
         lastClickedPoint: undefined,
@@ -65,12 +66,12 @@
     };
 
     let graph = createGraph();
-    let pathFinder = ngraphPath.aStar(graph, {
+    let pathFinder = ngraphPath.nba(graph, {
         distance(fromNode, toNode, link) {
             return link.data.distance;
         },
         heuristic(fromNode, toNode) {
-            return distance(fromNode, toNode);
+            return distance(fromNode.data.position, toNode.data.position);
         }
     });
 
@@ -85,6 +86,7 @@
     const CITY_NAMES = ["New Ghent", "Queer City", "HuBaKwa"];
     const MAX_RAIL_LENGTH = 250;
     const MIN_DISTANCE_BETWEEN_CITIES = SUCTION_RADIUS;
+    const INITIAL_FOREST_SIZE = 150;
 
     let backgroundCanvas = document.querySelector("#background");
     let backgroundContext = backgroundCanvas.getContext("2d");
@@ -101,10 +103,8 @@
         overlayCanvas.width = window.innerWidth;
         overlayCanvas.height = window.innerHeight;
     
-        scheduleBackgroundDraw();
+        state.redrawBackground = true;
     }
-
-    function scheduleBackgroundDraw () { state.redrawBackground = true; }
 
     function drawBackground () {
         backgroundContext.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
@@ -128,9 +128,16 @@
         }
     }
 
+    function randomElement (array) {
+        return array[Math.floor(Math.random() * array.length)];
+    }
+
     function updateTick () {
         state.cities.forEach(city => city.tick());
         state.transports.forEach(transport => transport.tick());
+        
+        if (state.tick % 50 == 0)
+            addTreeInForest(randomElement(state.forests).position, Math.random() * INITIAL_FOREST_SIZE);
 
         // Remove delivered transports
         for (var i = 0; i < state.transports.length; i++) {
@@ -434,7 +441,7 @@
     function validNewStation (point) {
         if (isCity(point)) return true;
         if (isWater(point) || (isMountain(point) && !isSnow(point))) return false;
-        if (getCity(point, MIN_DISTANCE_BETWEEN_CITIES)) return false;
+        if (getStation(point, MIN_DISTANCE_BETWEEN_CITIES)) return false;
         return true;
     }
 
@@ -467,7 +474,7 @@
         var newLength = state.rails.push({ from: fromStation, to: toStation });
         fromStation.rails.push(state.rails[newLength - 1]);
         toStation.rails.push(state.rails[newLength - 1]);
-        graph.addLink(nodeName(fromStation), nodeName(toStation), { distance: distance(fromStation, toStation )});
+        graph.addLink(nodeName(fromStation), nodeName(toStation), { distance: distance(fromStation.position, toStation.position )});
         state.money -= cost;
     }
 
@@ -786,7 +793,7 @@
             if (distance(tree.position, station.position) < SUCTION_RADIUS) {
                 state.trees.splice(i, 1);
                 station.lastResourceGathered = state.tick;
-                scheduleBackgroundDraw();
+                state.redrawBackground = true;
                 return true;
             }
         }
@@ -804,14 +811,35 @@
             }
         }
 
-        scheduleBackgroundDraw();
+        state.redrawBackground = true;
     }
 
-    function addTree (position) { state.trees.push({ position }); state.treeAddedThisTick = true; }
+    function addTree (position) { state.trees.push({ position }); state.treeAddedThisTick = true; state.redrawBackground = true; }
     function addWater (position, size) { state.water.push({ position, size }); }
     function addMountain (position, size) { state.mountains.push({ position, size }); }
     function addSnow (position, size) { state.snow.push({ position, size }); }
     function addCity (position, size) { state.cities.push(new City(position, size)); }
+
+    function addForest (forestPosition) {
+        state.forests.push({ position: forestPosition })
+        
+        for (let i = 0; i < INITIAL_FOREST_SIZE; i++) {
+            addTreeInForest(forestPosition, i);
+        }
+    }
+
+    function addTreeInForest (forestPosition, treeIndex) {
+        let offset = 1.8 * treeIndex;
+
+        let position = {
+            x: Math.round(forestPosition.x + (Math.random() - 0.5) * offset),
+            y: Math.round(forestPosition.y + (Math.random() - 0.5) * offset),
+        };
+
+        if (!isWater(position, TREE_RADIUS) && !isSnow(position, TREE_RADIUS) && !isMountain(position, TREE_RADIUS)) {
+            addTree(position);
+        }
+    }
 
     function isWater (position, size) {
         if (!size) size = 0;
@@ -921,17 +949,7 @@
                 y: clusterY * 200 + Math.random() * 75
             };
 
-            for (let i = 0; i < 150; i++) {
-                let offset = 1.8 * i;
-                let position = {
-                    x: Math.round(clusterCenter.x + (Math.random() - 0.5) * offset),
-                    y: Math.round(clusterCenter.y + (Math.random() - 0.5) * offset),
-                };
-
-                if (!isWater(position, TREE_RADIUS) && !isSnow(position, TREE_RADIUS) && !isMountain(position, TREE_RADIUS)) {
-                    addTree(position);
-                }
-            }
+            addForest(clusterCenter);
         }
     }
 
