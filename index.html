@@ -1,0 +1,1003 @@
+<head>
+    <meta charset="UTF-8">
+</head>
+<canvas id="background"></canvas>
+<canvas id="overlay"></canvas>
+<div class="moneycontainer">
+    <img src="money.png">
+    <span class="moneytext">0</span>
+</div>
+<style>
+    html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        max-width:100%;
+        max-height:100%;
+        background:#45b329;
+        font-family: fantasy;
+    }
+
+    canvas {
+        position:absolute;
+    }
+
+    .moneycontainer {
+        box-sizing: border-box;
+        top:16px;
+        position:absolute;
+        padding:16px;
+        text-align: right;
+        font-weight: bold;
+        box-shadow: 0px 3px 15px rgba(0,0,0,0.2);
+        left:16px;
+        background:#d7bc29;
+        color:#6d6509;
+        font-size:32px;
+        min-width:140px;
+    }
+
+    .moneycontainer img {
+        height: 36px;
+        vertical-align: top;
+    }
+</style>
+<script src='https://unpkg.com/ngraph.graph@20.0.1/dist/ngraph.graph.min.js'></script>
+<script src='https://unpkg.com/ngraph.path@1.3.1/dist/ngraph.path.min.js'></script>
+<script src="https://cdn.jsdelivr.net/npm/kdbush"></script>
+<script>
+    // Globals
+    let state = {
+        rails: [],
+        trees: [],
+        water: [],
+        cities: [],
+        mountains: [],
+        snow: [],
+        stations: [],
+        transports: [],
+        money: 400,
+
+        lastClickedPoint: undefined,
+        lastCursorPosition: undefined,
+        addingRails: false,
+        lastTick: Date.now(),
+        tick: 0
+    };
+
+    let graph = createGraph();
+    let pathFinder = ngraphPath.aStar(graph, {
+        distance(fromNode, toNode, link) {
+            return link.data.distance;
+        },
+        heuristic(fromNode, toNode) {
+            return distance(fromNode, toNode);
+        }
+    });
+
+    const RAIL_RADIUS = 8;
+    const SUCTION_RADIUS = 50;
+    const TICK_TIME = 1000 / 20;
+    const STATION_COST = 50;
+    const TRANSPORT_PIXELS_PER_MS = 0.03;
+    const DISTANCE_PER_TICK = TICK_TIME * TRANSPORT_PIXELS_PER_MS;
+    const RESOURCE_COLLECTION_COOLDOWN_TICKS = 100;
+    const TREE_RADIUS = 5;
+    const CITY_NAMES = ["New Ghent", "Queer City", "HuBaKwa"];
+    const MAX_RAIL_LENGTH = 250;
+    const MIN_DISTANCE_BETWEEN_CITIES = SUCTION_RADIUS;
+
+    let backgroundCanvas = document.querySelector("#background");
+    let backgroundContext = backgroundCanvas.getContext("2d");
+
+    let overlayCanvas = document.querySelector("#overlay");
+    let overlayContext = overlayCanvas.getContext("2d");
+
+    let moneyElem = document.querySelector(".moneytext");
+    
+    // Functions
+    function resize () {
+        backgroundCanvas.width = window.innerWidth;
+        backgroundCanvas.height = window.innerHeight;
+        overlayCanvas.width = window.innerWidth;
+        overlayCanvas.height = window.innerHeight;
+    
+        scheduleBackgroundDraw();
+    }
+
+    function scheduleBackgroundDraw () { state.redrawBackground = true; }
+
+    function drawBackground () {
+        backgroundContext.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+        drawWater();
+        drawMountains();
+        drawSnow();
+        drawTrees();
+        state.redrawBackground = false;
+    }
+
+    function update () {
+        let diff = Date.now() - state.lastTick;
+        let started = Date.now();
+
+        while (diff >= TICK_TIME && Date.now() - started < 100) {
+            updateTick();
+            state.tick++;
+
+            state.lastTick += TICK_TIME;
+            diff -= TICK_TIME;
+        }
+    }
+
+    function updateTick () {
+        state.cities.forEach(city => city.tick());
+        state.transports.forEach(transport => transport.tick());
+
+        // Remove delivered transports
+        for (var i = 0; i < state.transports.length; i++) {
+            if (state.transports[i].delivered) {
+                state.transports.splice(i, 1);
+                i--;
+            }
+        }
+
+        state.treeAddedThisTick = false;
+    }
+
+    function maybeUpgradeStation (station) {
+        if (Math.random() < 0.02) {
+            if (!isCity(station.position))
+                return addCity(station.position, 10);
+
+            getCity(station.position).size += 1;
+        }
+    }
+
+    function loop () {
+        update();
+        moneyElem.textContent = state.money;
+
+        if (state.redrawBackground) drawBackground();
+        drawOverlay();
+
+        requestAnimationFrame(loop);
+    }
+
+    function drawOverlay () {
+        overlayContext.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        drawCities();
+        drawRails();
+        drawStations();
+        drawTransports();
+        drawCurrentRail();
+        drawCityDetails();
+    }
+
+    function drawTransports () {
+        overlayContext.beginPath();
+        state.transports.forEach(transport => {
+            overlayContext.font = "bold 16px Arial";
+            overlayContext.fillStyle = '#292828';
+            var size = overlayContext.measureText(transport.type);
+            var height = size.actualBoundingBoxAscent + size.actualBoundingBoxDescent;
+            overlayContext.fillText(transport.type, transport.position.x - size.width / 2, transport.position.y + height / 2);
+        });
+        overlayContext.fill();
+    }
+
+    function drawCities () {
+        overlayContext.beginPath();
+        state.cities.forEach(city => {
+            overlayContext.moveTo(city.position.x, city.position.y);
+            overlayContext.arc(city.position.x, city.position.y, city.renderSize(), 0, 2 * Math.PI, false);
+        });
+        overlayContext.fillStyle = '#b1b7b0';
+        overlayContext.fill();
+    }
+
+    function drawCityDetails () {
+        overlayContext.beginPath();
+        state.cities.forEach(city => {
+            let nameText = city.size + "🧑"; //`${city.name} (${city.size}🧑)`;
+            let requestText = city.requests.length > 0 ? city.requests.join("") + "?" : "";
+            let offerText = city.offers.length > 0 ? city.offers.join("") + "!" : "";
+            overlayContext.font = "bold 20px Arial";
+            overlayContext.fillStyle = '#333333';
+            overlayContext.fillText(nameText, city.position.x - (overlayContext.measureText(nameText).width / 2), city.position.y - 22);
+            overlayContext.fillText(requestText, city.position.x - (overlayContext.measureText(requestText).width / 2), city.position.y + 0 + city.renderSize());
+            overlayContext.fillText(offerText, city.position.x - (overlayContext.measureText(offerText).width / 2), city.position.y + 0 + (requestText ? 24 : 0) + city.renderSize());
+        });
+        overlayContext.fill();
+    }
+
+    function drawSnow () {
+        backgroundContext.beginPath();
+        state.snow.forEach(snow => {
+            backgroundContext.moveTo(snow.position.x, snow.position.y);
+            backgroundContext.arc(snow.position.x, snow.position.y, snow.size, 0, 2 * Math.PI, false);
+            backgroundContext.fillStyle = 'white';
+        });
+        backgroundContext.fill();
+    }
+
+    function drawMountains () {
+        backgroundContext.beginPath();
+        state.mountains.forEach(mountain => {
+            backgroundContext.moveTo(mountain.position.x, mountain.position.y);
+            backgroundContext.arc(mountain.position.x, mountain.position.y, mountain.size, 0, 2 * Math.PI, false);
+            backgroundContext.fillStyle = '#827b83';
+        });
+        backgroundContext.fill();
+    }
+
+    function drawTrees () {
+        backgroundContext.beginPath();
+        state.trees.forEach(tree => {
+            backgroundContext.moveTo(tree.position.x, tree.position.y);
+            backgroundContext.arc(tree.position.x, tree.position.y, TREE_RADIUS, 0, 2 * Math.PI, false);
+            backgroundContext.fillStyle = '#2f771d';
+        });
+        backgroundContext.fill();
+    }
+
+    function drawWater () {
+        backgroundContext.beginPath();
+        state.water.forEach(water => {
+            backgroundContext.moveTo(water.position.x, water.position.y);
+            backgroundContext.arc(water.position.x, water.position.y, water.size, 0, 2 * Math.PI, false);
+            backgroundContext.fillStyle = '#03a9f4';
+        });
+        backgroundContext.fill();
+    }
+
+    function drawStations () {
+        overlayContext.beginPath();
+        state.stations.forEach(station => {
+            ratio = (RESOURCE_COLLECTION_COOLDOWN_TICKS - (state.tick - station.lastResourceGathered)) / RESOURCE_COLLECTION_COOLDOWN_TICKS;
+            if (ratio < 0) ratio = 0;
+            overlayContext.moveTo(station.position.x, station.position.y);
+            overlayContext.arc(station.position.x, station.position.y, RAIL_RADIUS + 4, 0, 2 * Math.PI * ratio, false);
+        });
+        overlayContext.fillStyle = 'white';
+        overlayContext.fill();
+
+        overlayContext.beginPath();
+        state.stations.forEach(station => {
+            overlayContext.moveTo(station.position.x, station.position.y);
+            overlayContext.arc(station.position.x, station.position.y, RAIL_RADIUS, 0, 2 * Math.PI, false);
+        });
+        overlayContext.fillStyle = '#282121';
+        overlayContext.fill();
+    }
+
+    function drawRails () {
+        overlayContext.beginPath();
+        state.rails.forEach(rail => {
+            overlayContext.moveTo(rail.from.position.x, rail.from.position.y);
+            overlayContext.lineTo(rail.to.position.x, rail.to.position.y);
+        });
+        overlayContext.lineWidth = 5;
+        overlayContext.setLineDash([20, 5]);
+        overlayContext.strokeStyle = '#282121';
+        overlayContext.stroke();
+    }
+
+    function drawSuctionZonesWithoutFill () {
+        overlayContext.beginPath();
+        state.stations.forEach(station => {
+            overlayContext.moveTo(station.position.x, station.position.y);
+            overlayContext.arc(station.position.x, station.position.y, SUCTION_RADIUS, 0, 2 * Math.PI, false);
+        });
+    }
+
+    function drawCurrentRail () {
+        if (!state.lastClickedPoint || !state.lastCursorPosition || !state.addingRails) return;
+
+        let from = snapToStationOrCity(state.lastClickedPoint);
+        let to = snapToStationOrCity(state.lastCursorPosition);
+
+        let cost = railCost(from, to);
+        if (isStation(from) && isStation(to) && isConnected(getOrCreateStation(from), getOrCreateStation(to))) cost = 0;
+
+        drawSuctionZonesWithoutFill();
+        overlayContext.moveTo(from.x, from.y);
+        overlayContext.arc(from.x, from.y, SUCTION_RADIUS, 0, 2 * Math.PI, false);
+        overlayContext.fillStyle = '#0000ff50';
+        overlayContext.fill();
+        overlayContext.beginPath();
+        overlayContext.moveTo(to.x, to.y);
+        overlayContext.arc(to.x, to.y, SUCTION_RADIUS, 0, 2 * Math.PI, false);
+        overlayContext.fillStyle = '#0000ff50';
+        overlayContext.fill();
+
+        overlayContext.beginPath();
+        overlayContext.moveTo(from.x, from.y);
+        overlayContext.lineTo(to.x, to.y);
+        overlayContext.lineWidth = 5;
+        overlayContext.setLineDash([20, 5]);
+        overlayContext.strokeStyle = !validNewRail(from, to) ? 'red' : '#534d4d';
+        overlayContext.stroke();
+
+        overlayContext.beginPath();
+        overlayContext.moveTo(from.x, from.y);
+        overlayContext.arc(from.x, from.y, RAIL_RADIUS, 0, 2 * Math.PI, false);
+        overlayContext.fillStyle = isStation(from) || validNewStation(from) ? '#282121' : 'red';
+        overlayContext.fill();
+
+        overlayContext.beginPath();
+        overlayContext.moveTo(to.x, to.y);
+        overlayContext.arc(to.x, to.y, RAIL_RADIUS, 0, 2 * Math.PI, false);
+        overlayContext.fillStyle = isStation(to) || validNewStation(to) ? '#282121' : 'red';
+        overlayContext.fill();
+
+        overlayContext.beginPath();
+        overlayContext.font = "24px Fantasy";
+        overlayContext.fillStyle = state.money < cost ? 'red' : '#534d4d';
+        overlayContext.fillText(cost + "$", to.x, to.y - 30);
+        overlayContext.fill();
+    }
+
+    function railCost (from, to) {
+        let cost = Math.ceil(distance(from, to));
+        if (!isStation(from) && !isCity(from)) cost += STATION_COST;
+        if (!isStation(to) && !isCity(to)) cost += STATION_COST;
+        return cost;
+    }
+
+    function getCursorPosition (canvas, event) {
+        const rect = canvas.getBoundingClientRect()
+        const x = event.clientX - rect.left
+        const y = event.clientY - rect.top
+        return { x, y };
+    }
+
+    overlayCanvas.addEventListener("click", (event) => {
+        let cursor = getCursorPosition(overlayCanvas, event);
+        
+        if (state.addingRails) {
+            tryAddRail(state.lastClickedPoint, cursor);    
+        }
+
+        state.addingRails = !state.addingRails;
+        state.lastClickedPoint = cursor;
+    });
+
+    overlayCanvas.addEventListener("mousemove", () => {
+        state.lastCursorPosition = getCursorPosition(overlayCanvas, event);
+    });
+
+    function distance (p1, p2) {
+        let a = p1.x - p2.x;
+        let b = p1.y - p2.y;
+        return Math.sqrt(a * a + b * b);
+    }
+
+    function isCity (point) {
+        for (let i = 0; i < state.cities.length; i++) {
+            if (distance(point, state.cities[i].position) < 1) return true;
+        }
+
+        return false;
+    }
+
+    function isStation (point) {
+        for (let i = 0; i < state.stations.length; i++) {
+            if (distance(point, state.stations[i].position) < 1) return true;
+        }
+
+        return false;
+    }
+
+    function getStation (point, within) {
+        for (let i = 0; i < state.stations.length; i++) {
+            let station = state.stations[i];
+            if (distance(point, station.position) < (within || 1)) return station;
+        }
+    }
+
+    function getOrCreateStation (point) {
+        for (let i = 0; i < state.stations.length; i++) {
+            let station = state.stations[i];
+            if (distance(point, station.position) < 1) return station;
+        }
+
+        let station = new Station(point);
+        state.stations.push(station);
+        graph.addNode(nodeName(station), station);
+        return station;
+    }
+
+    function getCity (position, within) {
+        for (let i = 0; i < state.cities.length; i++) {
+            let city = state.cities[i];
+            if (distance(position, city.position) < (within || 1)) return city;
+        }
+    }
+
+    function snapToStationOrCity (point) {
+        for (let i = 0; i < state.stations.length; i++) {
+            let station = state.stations[i];
+            if (distance(station.position, point) < RAIL_RADIUS * 2) { return station.position; }
+        }
+
+        for (let i = 0; i < state.cities.length; i++) {
+            let city = state.cities[i];
+            if (distance(city.position, point) < city.renderSize() + RAIL_RADIUS) { return city.position; }
+        }
+        
+        return point;
+    }
+
+    function nodeName (station) {
+        return station.position.x + "x" + station.position.y;
+    }
+
+    function validNewStation (point) {
+        if (isCity(point)) return true;
+        if (isWater(point) || (isMountain(point) && !isSnow(point))) return false;
+        if (getCity(point, MIN_DISTANCE_BETWEEN_CITIES)) return false;
+        return true;
+    }
+
+    function validNewRail (from, to) {
+        let fromIsStation = isStation(from);
+        let toIsStation = isStation(to);
+        let length = distance(from, to);
+
+        if (length > MAX_RAIL_LENGTH) return false;
+        if (!fromIsStation && !validNewStation(from)) return false;
+        if (!toIsStation && !validNewStation(to)) return false;
+
+        return true;
+    }
+
+    function tryAddRail (from, to) {
+        from = snapToStationOrCity(from);
+        to = snapToStationOrCity(to);
+
+        if (!validNewRail(from, to)) return;
+
+        let cost = railCost(from, to);
+        if (state.money < cost) return;
+
+        let fromStation = getOrCreateStation(from);
+        let toStation = getOrCreateStation(to);
+
+        if (isConnected(fromStation, toStation)) return;
+
+        var newLength = state.rails.push({ from: fromStation, to: toStation });
+        fromStation.rails.push(state.rails[newLength - 1]);
+        toStation.rails.push(state.rails[newLength - 1]);
+        graph.addLink(nodeName(fromStation), nodeName(toStation), { distance: distance(fromStation, toStation )});
+        state.money -= cost;
+    }
+
+    class Transport {
+        constructor (type, path, target, reverse) {
+            this.type = type;
+            this.path = path;
+            this.target = target;
+            this.time = 0;
+            this.position = { x: path[reverse ? path.length - 1 : 0].data.position.x, y: path[reverse ? path.length - 1 : 0].data.position.y};
+            this.delivered = false;
+            this.reverse = reverse;
+        }
+
+        tick () {
+            if (this.delivered) return;
+
+            if (!this.nextStop()) {
+                this.target.deliver(this.type);
+                this.delivered = true;
+                return;
+            }
+
+            let nextStop = this.nextStop();
+            let distanceLeft = distance(this.position, nextStop.data.position);
+            let ratio = DISTANCE_PER_TICK / distanceLeft;
+
+            if (ratio >= 1) this.removeNextStop();
+            else {
+                this.position.x += (nextStop.data.position.x - this.position.x) * ratio;
+                this.position.y += (nextStop.data.position.y - this.position.y) * ratio;
+            }
+        }
+
+        removeNextStop () {
+            let pathElement = this.reverse ? this.path.pop() : this.path.shift();
+            maybeUpgradeStation(pathElement.data);
+        }
+
+        nextStop () {
+            return this.reverse ? this.path[this.path.length - 2] : this.path[1];
+        }
+    }
+
+    class Station {
+        constructor (position) {
+            this.position = position;
+            this.rails = [];
+            this.lastResourceGathered = -RESOURCE_COLLECTION_COOLDOWN_TICKS;
+        }
+    }
+
+    class City {
+        constructor (position, size) {
+            this.position = position;
+            this.requests = ["🌳", "🌳", "🌳"];
+            this.offers = [];
+            this.size = size || 100;
+            this.name = CITY_NAMES[Math.floor(Math.random() * CITY_NAMES.length)];
+        }
+
+        tick () {
+            this.collectRequests();
+            this.addRequests();
+            this.deliverOffers();
+        }
+
+        deliverOffers () {
+            if (state.tick % 20 == 0 && this.offers.length > 0) {
+                for (var i = 0; i < this.offers.length; i++) {
+                    if (this.deliverOffer(this.offers[i])) break;
+                }
+            }
+        }
+
+        deliverOffer (resource) {
+            var path =
+                resource == "⛷️" ? findSnow(this.position) :
+                resource == "🧑" ? findFunCity(this.position) : [];
+
+            if (!path || path.length == 0) return false;
+            if (resource == "🧑") {
+                this.size += 1;
+                createTransport(resource, path, getCity(path[0].data.position), true);
+            } else {
+                createTransport(resource, path, this, true);
+            }
+            this.offers.splice(this.offers.indexOf(resource), 1);
+        }
+
+        collectRequests () {
+            if (state.tick % 20 == 0 && this.requests.length > 0) {
+                for (var i = 0; i < this.requests.length; i++) {
+                    if (this.collectResource(this.requests[i])) break;
+                }
+            }
+        }
+
+        collectResource (resource) {
+            var path =
+                resource == "🌳" ?
+                findAndCutTree(this.position) :
+                resource == "💧" ?
+                findWater(this.position) :
+                resource == "🏔️" ?
+                findStone(this.position) : [];
+
+            if (!path || path.length == 0) return false;
+            createTransport(resource, path, this);
+            this.requests.splice(this.requests.indexOf(resource), 1);
+        }
+
+        addRequests () {
+            if (this.size < 300 && this.requests.filter(r => r == "🌳").length < 5 && Math.random() < this.size / 20000)
+                this.requests.push("🌳");
+
+            if (this.size < 300 && this.requests.filter(r => r == "💧").length < 5 && Math.random() < this.size / 40000 && this.size > 175)
+                this.requests.push("💧");
+
+            if (this.offers.filter(r => r == "🧑").length < 5 && Math.random() < this.size / 40000 && this.size > 300)
+                this.offers.push("🧑");
+
+            if (this.size < 300 && this.requests.filter(r => r == "🏔️").length < 5 && Math.random() < this.size / 40000 && this.size > 225)
+                this.requests.push("🏔️");
+
+            if (this.offers.filter(r => r == "⛷️").length < 5 && Math.random() < this.size / 40000 && this.size > 1000)
+                this.offers.push("⛷️");
+
+            if (this.size > 400) {
+                while (this.requests.indexOf("🌳") != -1) this.requests.splice(this.requests.indexOf("🌳"), 1);
+                while (this.requests.indexOf("🌳") != -1) this.requests.splice(this.requests.indexOf("💧"), 1);
+                while (this.requests.indexOf("🌳") != -1) this.requests.splice(this.requests.indexOf("🏔️"), 1);
+            }
+        }
+
+        deliver () {
+            this.size += 1;
+            state.money += 10;
+        }
+
+        renderSize () {
+            return Math.min(Math.sqrt(this.size), 30);
+        }
+    }
+
+    function createTransport (type, path, target, reverse) {
+        state.transports.push(new Transport(type, path, target, reverse));
+    }
+
+    function isConnected (station1, station2) {
+        if (station1 == station2) return true;
+        for (var i = 0; i < station1.rails.length; i++) {
+            var rail = station1.rails[i];
+            if (rail.from == station1 && rail.to == station2 ||
+                rail.from == station2 && rail.to == station1) return true;
+        }
+
+        return false;
+    }
+
+    function getConnectedStations (station) {
+        let stations = [];
+
+        for (var i = 0; i < station.rails.length; i++) {
+            if (station.rails[i].from == station) stations.push(station.rails[i].to);
+            else if (station.rails[i].to == station) stations.push(station.rails[i].from);
+        }
+
+        return stations;
+    }
+
+    function getPath (fromStation, toStation) {
+        if (!isStation(fromStation.position) || !isStation(toStation.position))
+            throw new Error(`Argument should be a station, was: ${fromStation} and ${toStation}`);
+
+        return pathFinder.find(nodeName(fromStation), nodeName(toStation));
+    }
+
+    function findStone (position) {
+        if (!isStation(position)) return;
+
+        let originalStation = getOrCreateStation(position);
+        let checked = new Set();
+        let toCheck = [originalStation];
+
+        while (toCheck.length > 0) {
+            var station = toCheck.shift();
+            if (stoneNearStation(station)) return getPath(originalStation, station);
+            checked.add(station);
+            toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
+        }
+
+        return false;
+    }
+
+    function findSnow (position) {
+        if (!isStation(position)) return;
+
+        let originalStation = getOrCreateStation(position);
+        let checked = new Set();
+        let toCheck = [originalStation];
+
+        while (toCheck.length > 0) {
+            var station = toCheck.shift();
+            if (snowNearStation(station)) return getPath(originalStation, station);
+            checked.add(station);
+            toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
+        }
+
+        return false;
+    }
+
+    function findFunCity (position) {
+        if (!isStation(position)) return;
+
+        let originalStation = getOrCreateStation(position);
+        let checked = new Set();
+        let toCheck = [originalStation];
+
+        while (toCheck.length > 0) {
+            var station = toCheck.shift();
+            // Distance check cause original cityStation should not count
+            // Random because sometimes we just don't like a city
+            if (distance(station.position, position) > 1 && cityNearStation(station) && Math.random() < 0.5) return getPath(originalStation, station);
+            checked.add(station);
+            toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
+        }
+
+        return false;
+    }
+
+    function findWater (position) {
+        if (!isStation(position)) return;
+
+        let originalStation = getOrCreateStation(position);
+        let checked = new Set();
+        let toCheck = [originalStation];
+
+        while (toCheck.length > 0) {
+            var station = toCheck.shift();
+            if (waterNearStation(station)) return getPath(originalStation, station);
+            checked.add(station);
+            toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
+        }
+
+        return false;
+    }
+
+    function findAndCutTree (position) {
+        if (!isStation(position)) return;
+
+        let originalStation = getOrCreateStation(position);
+        let checked = new Set();
+        let toCheck = [originalStation];
+
+        while (toCheck.length > 0) {
+            var station = toCheck.shift();
+            if (cutTreeNearStation(station)) return getPath(originalStation, station);
+            checked.add(station);
+            toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
+        }
+
+        return false;
+    }
+
+    function stoneNearStation (station) {
+        if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
+
+        for (let i = 0; i < state.mountains.length; i++) {
+            let mountain = state.mountains[i];
+            if (distance(mountain.position, station.position) < SUCTION_RADIUS + mountain.size) {
+                station.lastResourceGathered = state.tick;
+                return true;
+            }
+        }
+    }
+
+    function waterNearStation (station) {
+        if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
+
+        for (let i = 0; i < state.water.length; i++) {
+            let water = state.water[i];
+            if (distance(water.position, station.position) < SUCTION_RADIUS + water.size) {
+                station.lastResourceGathered = state.tick;
+                return true;
+            }
+        }
+    }
+
+    function cityNearStation (station) {
+        if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
+        if (isCity(station.position)) {
+            station.lastResourceGathered = state.tick;
+            return true;
+        }
+    }
+
+    function snowNearStation (station) {
+        if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
+
+        for (let i = 0; i < state.snow.length; i++) {
+            let snow = state.snow[i];
+            if (distance(snow.position, station.position) < SUCTION_RADIUS + snow.size) {
+                station.lastResourceGathered = state.tick;
+                return true;
+            }
+        }
+    }
+
+    function cutTreeNearStation (station) {
+        if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
+        if (station.noTreesNearby && !state.treeAddedThisTick) return;
+
+        for (let i = 0; i < state.trees.length; i++) {
+            let tree = state.trees[i];
+            if (distance(tree.position, station.position) < SUCTION_RADIUS) {
+                state.trees.splice(i, 1);
+                station.lastResourceGathered = state.tick;
+                scheduleBackgroundDraw();
+                return true;
+            }
+        }
+
+        station.noTreesNearby = true;
+    }
+
+    function cutAllTreesNearCity (city) {
+        for (let i = 0; i < state.trees.length; i++) {
+            let tree = state.trees[i];
+            if (distance(tree.position, city.position) < SUCTION_RADIUS) {
+                state.trees.splice(i, 1);
+                i--;
+                city.size += 1;
+            }
+        }
+
+        scheduleBackgroundDraw();
+    }
+
+    function addTree (position) { state.trees.push({ position }); state.treeAddedThisTick = true; }
+    function addWater (position, size) { state.water.push({ position, size }); }
+    function addMountain (position, size) { state.mountains.push({ position, size }); }
+    function addSnow (position, size) { state.snow.push({ position, size }); }
+    function addCity (position, size) { state.cities.push(new City(position, size)); }
+
+    function isWater (position, size) {
+        if (!size) size = 0;
+
+        for (var i = 0; i < state.water.length; i++) {
+            if (distance(state.water[i].position, position) < state.water[i].size + size)
+                return true;
+        }
+
+        return false;
+    }
+
+    function isMountain (position, size) {
+        if (!size) size = 0;
+
+        for (var i = 0; i < state.mountains.length; i++) {
+            let mountain = state.mountains[i];
+            if (distance(mountain.position, position) < mountain.size + size)
+                return true;
+        }
+
+        return false;
+    }
+
+    function isSnow (position, size) {
+        if (!size) size = 0;
+        for (var i = 0; i < state.snow.length; i++) {
+            if (distance(state.snow[i].position, position) < state.snow[i].size + size)
+                return true;
+        }
+
+        return false;
+    }
+
+    function keydown (event) {
+        if(event.key == "Escape") {
+            state.addingRails = false;
+        }
+    }
+
+    // event listeners
+    window.addEventListener('resize', resize);
+    document.addEventListener('keydown', keydown);
+
+    // init
+
+    // Add some mountains
+    for (let clusterX = 1; clusterX < 4; clusterX++) {
+        for (let clusterY = 0; clusterY < 4; clusterY++) {
+            let clusterCenter = {
+                x: 700 + clusterX * 300 + Math.random() * 200,
+                y: 25 + clusterY * 300 + Math.random() * 200
+            };
+
+            let mountainAmount = 10 + clusterX * 20
+            for (let i = 0; i < mountainAmount; i++) {
+                let position = {
+                    x: Math.round(clusterCenter.x + (Math.random() - 0.5) * i * 2),
+                    y: Math.round(clusterCenter.y + (Math.random() - 0.5) * i * 3),
+                };
+
+                let size = mountainAmount / 1.5 - (i / 2);
+                if (!isWater(position, size)) addMountain(position, size);
+            }
+
+            let snowAmount = clusterX * 10;
+            for (let i = 0; i < snowAmount; i++) {
+                let position = {
+                    x: Math.round(clusterCenter.x + (Math.random() - 0.5) * i * 3),
+                    y: Math.round(clusterCenter.y + (Math.random() - 0.5) * i * 4.5),
+                };
+
+                let size = (snowAmount / 1.5) - (i / 2) + Math.random() * 5;
+
+                if (!isWater(position, size) && isMountain(position, size)) addSnow(position, size);
+            }
+        }
+    }
+
+    // Add some water
+    for (let clusterX = 0; clusterX < 6; clusterX++) {
+        for (let clusterY = 0; clusterY < 6; clusterY++) {
+            let clusterCenter = {
+                x: clusterX * 400 + Math.random() * 250,
+                y: clusterY * 400 + Math.random() * 250
+            };
+
+            for (let i = 0; i < 120; i++) {
+                let position = {
+                    x: Math.round(clusterCenter.x + (Math.random() - 0.5) * i),
+                    y: Math.round(clusterCenter.y + (Math.random() - 0.5) * i),
+                };
+
+                let size = 30 - (i / 5);
+                if (!isMountain(position, size) && !isSnow(position, size)) {
+                    addWater(position, size);
+                }
+            }
+        }
+    }
+
+    // Add some trees
+    for (let clusterX = 0; clusterX < 10; clusterX++) {
+        for (let clusterY = 0; clusterY < 5; clusterY++) {
+            let clusterCenter = {
+                x: clusterX * 200 + Math.random() * 75,
+                y: clusterY * 200 + Math.random() * 75
+            };
+
+            for (let i = 0; i < 150; i++) {
+                let offset = 1.8 * i;
+                let position = {
+                    x: Math.round(clusterCenter.x + (Math.random() - 0.5) * offset),
+                    y: Math.round(clusterCenter.y + (Math.random() - 0.5) * offset),
+                };
+
+                if (!isWater(position, TREE_RADIUS) && !isSnow(position, TREE_RADIUS) && !isMountain(position, TREE_RADIUS)) {
+                    addTree(position);
+                }
+            }
+        }
+    }
+
+    // Add some cities
+    for (var i = 0; i < 10; i++) {
+        let position = {
+            x: Math.round(100 + Math.random() * 200),
+            y: Math.round(100 + Math.random() * 400)
+        };
+
+        if (!isWater(position) && !isSnow(position, 10) && !isMountain(position) && !getCity(position, SUCTION_RADIUS * 2)) {
+            addCity(position);
+            break;
+        }
+    }
+    
+    for (var i = 0; i < 10; i++) {
+        let position = {
+            x: Math.round(500 + Math.random() * 200),
+            y: Math.round(100 + Math.random() * 400)
+        };
+
+        if (!isWater(position) && !isSnow(position, 10) && !isMountain(position) && !getCity(position, SUCTION_RADIUS * 2)) {
+            addCity(position);
+            break;
+        }
+    }
+
+    for (var i = 0; i < 10; i++) {
+        let position = {
+            x: Math.round(400 + Math.random() * 200),
+            y: Math.round(400 + Math.random() * 200)
+        };
+
+        if (!isWater(position) && !isSnow(position, 10) && !isMountain(position) && !getCity(position, SUCTION_RADIUS * 2)) {
+            addCity(position);
+            break;
+        }
+    }
+
+    for (var i = 0; i < 10; i++) {
+        let position = {
+            x: Math.round(700 + Math.random() * 300),
+            y: Math.round(600 + Math.random() * 200)
+        };
+
+        if (!isWater(position) && !isSnow(position, 10) && !isMountain(position) && !getCity(position, SUCTION_RADIUS * 2)) {
+            addCity(position);
+            break;
+        }
+    }
+
+    for (var i = 0; i < 10; i++) {
+        let position = {
+            x: Math.round(100 + Math.random() * 400),
+            y: Math.round(500 + Math.random() * 400)
+        };
+
+        if (!isWater(position) && !isSnow(position, 10) && !isMountain(position) && !getCity(position, SUCTION_RADIUS * 2)) {
+            addCity(position);
+            break;
+        }
+    }
+
+    state.cities.forEach(city => cutAllTreesNearCity(city));
+
+    resize();
+    requestAnimationFrame(loop);
+</script>
