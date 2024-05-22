@@ -146,8 +146,6 @@
                 i--;
             }
         }
-
-        state.treeAddedThisTick = false;
     }
 
     function maybeUpgradeStation (station) {
@@ -208,7 +206,7 @@
             let requestText = city.requests.length > 0 ? city.requests.join("") + "?" : "";
             let offerText = city.offers.length > 0 ? city.offers.join("") + "!" : "";
             overlayContext.font = "bold 20px Arial";
-            overlayContext.fillStyle = '#333333';
+            overlayContext.fillStyle = 'white';
             overlayContext.fillText(nameText, city.position.x - (overlayContext.measureText(nameText).width / 2), city.position.y - 22);
             overlayContext.fillText(requestText, city.position.x - (overlayContext.measureText(requestText).width / 2), city.position.y + 0 + city.renderSize());
             overlayContext.fillText(offerText, city.position.x - (overlayContext.measureText(offerText).width / 2), city.position.y + 0 + (requestText ? 24 : 0) + city.renderSize());
@@ -588,26 +586,20 @@
         }
 
         addRequests () {
-            if (this.size < 300 && this.requests.filter(r => r == "🌳").length < 5 && Math.random() < this.size / 20000)
+            if (this.requests.filter(r => r == "🌳").length < 5 && Math.random() < this.size / 20000)
                 this.requests.push("🌳");
 
-            if (this.size < 300 && this.requests.filter(r => r == "💧").length < 5 && Math.random() < this.size / 40000 && this.size > 175)
+            if (this.requests.filter(r => r == "💧").length < 5 && Math.random() < this.size / 40000 && this.size > 175)
                 this.requests.push("💧");
 
             if (this.offers.filter(r => r == "🧑").length < 5 && Math.random() < this.size / 40000 && this.size > 300)
                 this.offers.push("🧑");
 
-            if (this.size < 300 && this.requests.filter(r => r == "🏔️").length < 5 && Math.random() < this.size / 40000 && this.size > 225)
+            if (this.requests.filter(r => r == "🏔️").length < 5 && Math.random() < this.size / 40000 && this.size > 225)
                 this.requests.push("🏔️");
 
             if (this.offers.filter(r => r == "⛷️").length < 5 && Math.random() < this.size / 40000 && this.size > 1000)
                 this.offers.push("⛷️");
-
-            if (this.size > 400) {
-                while (this.requests.indexOf("🌳") != -1) this.requests.splice(this.requests.indexOf("🌳"), 1);
-                while (this.requests.indexOf("🌳") != -1) this.requests.splice(this.requests.indexOf("💧"), 1);
-                while (this.requests.indexOf("🌳") != -1) this.requests.splice(this.requests.indexOf("🏔️"), 1);
-            }
         }
 
         deliver () {
@@ -786,7 +778,6 @@
 
     function cutTreeNearStation (station) {
         if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
-        if (station.noTreesNearby && !state.treeAddedThisTick) return;
 
         for (let i = 0; i < state.trees.length; i++) {
             let tree = state.trees[i];
@@ -797,8 +788,6 @@
                 return true;
             }
         }
-
-        station.noTreesNearby = true;
     }
 
     function cutAllTreesNearCity (city) {
@@ -814,7 +803,7 @@
         state.redrawBackground = true;
     }
 
-    function addTree (position) { state.trees.push({ position }); state.treeAddedThisTick = true; state.redrawBackground = true; }
+    function addTree (position) { state.trees.push({ position }); state.redrawBackground = true; }
     function addWater (position, size) { state.water.push({ position, size }); }
     function addMountain (position, size) { state.mountains.push({ position, size }); }
     function addSnow (position, size) { state.snow.push({ position, size }); }
