@@ -76,7 +76,7 @@
     });
 
     const RAIL_RADIUS = 8;
-    const SUCTION_RADIUS = 50;
+    const SUCTION_RADIUS = 75;
     const TICK_TIME = 1000 / 20;
     const STATION_COST = 50;
     const TRANSPORT_PIXELS_PER_MS = 0.03;
@@ -135,9 +135,6 @@
     function updateTick () {
         state.cities.forEach(city => city.tick());
         state.transports.forEach(transport => transport.tick());
-        
-        if (state.tick % 40 == 0)
-            addTreeInForest(randomElement(state.forests).position, Math.random() * INITIAL_FOREST_SIZE);
 
         // Remove delivered transports
         for (var i = 0; i < state.transports.length; i++) {
@@ -786,6 +783,7 @@
             if (distance(tree.position, station.position) < SUCTION_RADIUS) {
                 state.trees.splice(i, 1);
                 station.lastResourceGathered = state.tick;
+                addTreeInForest(randomElement(state.forests).position, Math.random() * INITIAL_FOREST_SIZE);
                 state.redrawBackground = true;
                 return true;
             }
@@ -820,7 +818,7 @@
     }
 
     function addTreeInForest (forestPosition, treeIndex) {
-        let offset = 1.8 * treeIndex;
+        let offset = 1.5 * treeIndex;
 
         let position = {
             x: Math.round(forestPosition.x + (Math.random() - 0.5) * offset),
@@ -912,16 +910,20 @@
 
     // Add some water
     for (let clusterX = 0; clusterX < 4; clusterX++) {
-        for (let clusterY = 0; clusterY < 4; clusterY++) {
+        for (let clusterY = 0; clusterY < 3; clusterY++) {
             let clusterCenter = {
                 x: clusterX * 400 + Math.random() * 250,
                 y: clusterY * 400 + Math.random() * 250
             };
 
-            for (let i = 0; i < 120; i++) {
+            let xShape = 0.7 + Math.random() / 2;
+            let yShape = 0.7 + Math.random() / 2;
+            let lakeSize = 50 + Math.random() * 90;
+
+            for (let i = 0; i < lakeSize; i++) {
                 let position = {
-                    x: Math.round(clusterCenter.x + (Math.random() - 0.5) * i),
-                    y: Math.round(clusterCenter.y + (Math.random() - 0.5) * i),
+                    x: Math.round(clusterCenter.x + (Math.random() - 0.5) * i * xShape),
+                    y: Math.round(clusterCenter.y + (Math.random() - 0.5) * i * yShape),
                 };
 
                 let size = 30 - (i / 5);
@@ -933,11 +935,11 @@
     }
 
     // Add some trees
-    for (let clusterX = 0; clusterX < 10; clusterX++) {
+    for (let clusterX = 0; clusterX < 6; clusterX++) {
         for (let clusterY = 0; clusterY < 5; clusterY++) {
             let clusterCenter = {
-                x: clusterX * 200 + Math.random() * 75,
-                y: clusterY * 200 + Math.random() * 75
+                x: clusterX * 275 + Math.random() * 175,
+                y: clusterY * 210 + Math.random() * 100
             };
 
             addForest(clusterCenter);
