@@ -7,6 +7,7 @@
     <img src="money.png">
     <span class="moneytext">0</span>
 </div>
+<div class="speedcontainer">1x</div>
 <style>
     html, body {
         margin: 0 !important;
@@ -21,19 +22,43 @@
         position:absolute;
     }
 
-    .moneycontainer {
-        box-sizing: border-box;
-        top:16px;
+    .speedcontainer {
         position:absolute;
+        right:16px;
+        top:16px;
+        
+        box-sizing: border-box;
         padding:16px;
+
+        background:#cddc39;
+        box-shadow: 0px 3px 15px rgba(0,0,0,0.2);
+
+        font-size:32px;
+        font-weight: bold;
+        color:#415d23;
+
+        cursor:pointer;
+        -webkit-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+    }
+
+    .moneycontainer {
+        position:absolute;
+        top:16px;
+        left:16px;
+
+        box-sizing: border-box;
+        padding:16px;
+        min-width:140px;
+
         text-align: right;
         font-weight: bold;
-        box-shadow: 0px 3px 15px rgba(0,0,0,0.2);
-        left:16px;
-        background:#d7bc29;
         color:#6d6509;
         font-size:32px;
-        min-width:140px;
+
+        background:#d7bc29;
+        box-shadow: 0px 3px 15px rgba(0,0,0,0.2);
     }
 
     .moneycontainer img {
@@ -47,6 +72,7 @@
 <script>
     // Globals
     let state = {
+        speed: 1,
         rails: [],
         trees: [],
         water: [],
@@ -56,7 +82,7 @@
         stations: [],
         transports: [],
         forests: [],
-        money: 400,
+        money: 10000,
 
         lastClickedPoint: undefined,
         lastCursorPosition: undefined,
@@ -83,7 +109,6 @@
     const DISTANCE_PER_TICK = TICK_TIME * TRANSPORT_PIXELS_PER_MS;
     const RESOURCE_COLLECTION_COOLDOWN_TICKS = 100;
     const TREE_RADIUS = 5;
-    const CITY_NAMES = ["New Ghent", "Queer City", "HuBaKwa"];
     const MAX_RAIL_LENGTH = 250;
     const MIN_DISTANCE_BETWEEN_CITIES = SUCTION_RADIUS;
     const INITIAL_FOREST_SIZE = 150;
@@ -95,6 +120,7 @@
     let overlayContext = overlayCanvas.getContext("2d");
 
     let moneyElem = document.querySelector(".moneytext");
+    let speedContainer = document.querySelector(".speedcontainer");
     
     // Functions
     function resize () {
@@ -120,9 +146,8 @@
         let started = Date.now();
 
         while (diff >= TICK_TIME && Date.now() - started < 100) {
-            updateTick();
-            state.tick++;
-
+            for (var i = 0; i < state.speed; i++) updateTick();
+            
             state.lastTick += TICK_TIME;
             diff -= TICK_TIME;
         }
@@ -133,6 +158,8 @@
     }
 
     function updateTick () {
+        state.tick++;
+
         state.cities.forEach(city => city.tick());
         state.transports.forEach(transport => transport.tick());
 
@@ -176,7 +203,7 @@
     function drawTransports () {
         overlayContext.beginPath();
         state.transports.forEach(transport => {
-            overlayContext.font = "bold 16px Arial";
+            overlayContext.font = "bold 14px Arial";
             overlayContext.fillStyle = '#292828';
             var size = overlayContext.measureText(transport.type);
             var height = size.actualBoundingBoxAscent + size.actualBoundingBoxDescent;
@@ -195,17 +222,27 @@
         overlayContext.fill();
     }
 
+    function countElementsAsString (array) {
+        let elements = {};
+        let stringArray = [];
+        array.forEach((e) => {elements[e] = elements[e] || 0; elements[e]++});
+        for (var e in elements) {
+            if (elements[e] == 1) stringArray.push(e);
+            else if (elements[e] == 2) stringArray.push(e + e);
+            else stringArray.push(elements[e] + e);
+        }
+        return stringArray.join(", ");
+    }
+
     function drawCityDetails () {
         overlayContext.beginPath();
         state.cities.forEach(city => {
-            let nameText = city.size + "🧑"; //`${city.name} (${city.size}🧑)`;
-            let requestText = city.requests.length > 0 ? city.requests.join("") + "?" : "";
-            let offerText = city.offers.length > 0 ? city.offers.join("") + "!" : "";
+            let offerText = city.size + "🧑";
+            let requestText = city.requests.length > 0 ? countElementsAsString(city.requests) + "?" : "";
             overlayContext.font = "bold 20px Arial";
             overlayContext.fillStyle = 'white';
-            overlayContext.fillText(nameText, city.position.x - (overlayContext.measureText(nameText).width / 2), city.position.y - 22);
-            overlayContext.fillText(requestText, city.position.x - (overlayContext.measureText(requestText).width / 2), city.position.y + 0 + city.renderSize());
-            overlayContext.fillText(offerText, city.position.x - (overlayContext.measureText(offerText).width / 2), city.position.y + 0 + (requestText ? 24 : 0) + city.renderSize());
+            overlayContext.fillText(offerText, city.position.x - (overlayContext.measureText(offerText).width / 2), city.position.y - 5 - city.renderSize());
+            overlayContext.fillText(requestText, city.position.x - (overlayContext.measureText(requestText).width / 2), city.position.y + 14 + city.renderSize());
         });
         overlayContext.fill();
     }
@@ -351,21 +388,6 @@
         return { x, y };
     }
 
-    overlayCanvas.addEventListener("click", (event) => {
-        let cursor = getCursorPosition(overlayCanvas, event);
-        
-        if (state.addingRails) {
-            tryAddRail(state.lastClickedPoint, cursor);    
-        }
-
-        state.addingRails = !state.addingRails;
-        state.lastClickedPoint = cursor;
-    });
-
-    overlayCanvas.addEventListener("mousemove", () => {
-        state.lastCursorPosition = getCursorPosition(overlayCanvas, event);
-    });
-
     function distance (p1, p2) {
         let a = p1.x - p2.x;
         let b = p1.y - p2.y;
@@ -435,7 +457,7 @@
     function validNewStation (point) {
         if (isCity(point)) return true;
         if (isWater(point) || (isMountain(point) && !isSnow(point))) return false;
-        if (getStation(point, MIN_DISTANCE_BETWEEN_CITIES)) return false;
+        if (getStation(point, MIN_DISTANCE_BETWEEN_CITIES) || getCity(point, MIN_DISTANCE_BETWEEN_CITIES)) return false;
         return true;
     }
 
@@ -527,7 +549,6 @@
             this.requests = ["🌳"];
             this.offers = [];
             this.size = size || 50;
-            this.name = CITY_NAMES[Math.floor(Math.random() * CITY_NAMES.length)];
         }
 
         tick () {
@@ -590,12 +611,6 @@
 
             if (this.requests.filter(r => r == "🏔️").length < 3 && this.requestChance() && this.size > 250)
                 this.requests.push("🏔️");
-
-            if (this.offers.filter(r => r == "🧑").length < 3 && this.requestChance() && this.size > 300)
-                this.offers.push("🧑");
-
-            if (this.offers.filter(r => r == "⛷️").length < 3 && this.requestChance() && this.size > 600)
-                this.offers.push("⛷️");
         }
 
         requestChance () {
@@ -604,7 +619,6 @@
 
         deliver () {
             this.size += 1;
-            state.money += 10;
         }
 
         renderSize () {
@@ -783,7 +797,6 @@
             if (distance(tree.position, station.position) < SUCTION_RADIUS) {
                 state.trees.splice(i, 1);
                 station.lastResourceGathered = state.tick;
-                addTreeInForest(randomElement(state.forests).position, Math.random() * INITIAL_FOREST_SIZE);
                 state.redrawBackground = true;
                 return true;
             }
@@ -821,8 +834,8 @@
         let offset = 1.5 * treeIndex;
 
         let position = {
-            x: Math.round(forestPosition.x + (Math.random() - 0.5) * offset),
-            y: Math.round(forestPosition.y + (Math.random() - 0.5) * offset),
+            x: Math.round(50 + forestPosition.x + (Math.random() - 0.5) * offset),
+            y: Math.round(50 + forestPosition.y + (Math.random() - 0.5) * offset),
         };
 
         if (!isWater(position, TREE_RADIUS) && !isSnow(position, TREE_RADIUS) && !isMountain(position, TREE_RADIUS)) {
@@ -872,6 +885,28 @@
     // event listeners
     window.addEventListener('resize', resize);
     document.addEventListener('keydown', keydown);
+
+    overlayCanvas.addEventListener("click", (event) => {
+        let cursor = getCursorPosition(overlayCanvas, event);
+        
+        if (state.addingRails) {
+            tryAddRail(state.lastClickedPoint, cursor);    
+        }
+
+        state.addingRails = !state.addingRails;
+        state.lastClickedPoint = cursor;
+    });
+
+    overlayCanvas.addEventListener("mousemove", () => {
+        state.lastCursorPosition = getCursorPosition(overlayCanvas, event);
+    });
+
+    speedContainer.addEventListener("click", () => {
+        if (state.speed == 0) state.speed = 1;
+        else state.speed *= 2;
+        if (state.speed > 16) state.speed = 0;
+        speedContainer.innerHTML = state.speed + "x";
+    });
 
     // init
 
@@ -946,66 +981,31 @@
         }
     }
 
+    let cityPositions = [
+        { x: 100, xVar: 200, y: 120, yVar: 200},
+        { x: 100, xVar: 300, y: 500, yVar: 300},
+        { x: 250, xVar: 150, y: 200, yVar: 200},
+        { x: 500, xVar: 150, y: 150, yVar: 200},
+        { x: 500, xVar: 200, y: 600, yVar: 150},
+        { x: 1200, xVar: 250, y: 600, yVar: 200},
+        { x: 1200, xVar: 250, y: 300, yVar: 200},
+    ];
+
     // Add some cities
-    for (var i = 0; i < 10; i++) {
-        let position = {
-            x: Math.round(100 + Math.random() * 200),
-            y: Math.round(100 + Math.random() * 400)
-        };
+    cityPositions.forEach((pos) => {
+        for (var i = 0; i < 10; i++) {
+            let position = {
+                x: Math.round(pos.x + Math.random() * pos.xVar),
+                y: Math.round(pos.y + Math.random() * pos.yVar)
+            };
 
-        if (!isWater(position) && !isSnow(position, 10) && !isMountain(position) && !getCity(position, SUCTION_RADIUS * 2)) {
-            addCity(position);
-            break;
+            if (!isWater(position) && !isSnow(position, 10) && !isMountain(position) && !getCity(position, SUCTION_RADIUS * 2)) {
+                addCity(position);
+                break;
+            }
         }
-    }
+    });
     
-    for (var i = 0; i < 10; i++) {
-        let position = {
-            x: Math.round(500 + Math.random() * 200),
-            y: Math.round(100 + Math.random() * 400)
-        };
-
-        if (!isWater(position) && !isSnow(position, 10) && !isMountain(position) && !getCity(position, SUCTION_RADIUS * 2)) {
-            addCity(position);
-            break;
-        }
-    }
-
-    for (var i = 0; i < 10; i++) {
-        let position = {
-            x: Math.round(400 + Math.random() * 200),
-            y: Math.round(400 + Math.random() * 200)
-        };
-
-        if (!isWater(position) && !isSnow(position, 10) && !isMountain(position) && !getCity(position, SUCTION_RADIUS * 2)) {
-            addCity(position);
-            break;
-        }
-    }
-
-    for (var i = 0; i < 10; i++) {
-        let position = {
-            x: Math.round(700 + Math.random() * 300),
-            y: Math.round(600 + Math.random() * 200)
-        };
-
-        if (!isWater(position) && !isSnow(position, 10) && !isMountain(position) && !getCity(position, SUCTION_RADIUS * 2)) {
-            addCity(position);
-            break;
-        }
-    }
-
-    for (var i = 0; i < 10; i++) {
-        let position = {
-            x: Math.round(100 + Math.random() * 400),
-            y: Math.round(500 + Math.random() * 400)
-        };
-
-        if (!isWater(position) && !isSnow(position, 10) && !isMountain(position) && !getCity(position, SUCTION_RADIUS * 2)) {
-            addCity(position);
-            break;
-        }
-    }
 
     state.cities.forEach(city => cutAllTreesNearCity(city));
 
