@@ -937,7 +937,9 @@
         let cursor = getCursorPosition(overlayCanvas, event);
         let targetWorldCoord = cursorPositionToWorldCoords(cursor);
 
-        state.zoom *= event.deltaY < 0 ? 2 : 0.5;
+        state.zoom *= event.deltaY < 0 ? 1.5 : 2/3;
+        if (state.zoom < 0.2962962962962963) state.zoom = 0.2962962962962963;
+        if (state.zoom > 3.375) state.zoom = 3.375;
         state.redrawBackground = true;
 
         let cursorRatio = {
