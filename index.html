@@ -88,7 +88,13 @@
         lastCursorPosition: undefined,
         addingRails: false,
         lastTick: Date.now(),
-        tick: 0
+        tick: 0,
+
+        viewCoords: { x: 0, y: 0 },
+        movingView: false,
+        moveStartCursor: undefined,
+        moveStartCoords: { x: 0, y: 0 },
+        zoom: 1
     };
 
     let graph = createGraph();
@@ -133,7 +139,10 @@
     }
 
     function drawBackground () {
+        backgroundContext.setTransform(1, 0, 0, 1, 0, 0);
         backgroundContext.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+        backgroundContext.scale(state.zoom, state.zoom);
+        backgroundContext.translate(-state.viewCoords.x, -state.viewCoords.y);
         drawWater();
         drawMountains();
         drawSnow();
@@ -172,32 +181,46 @@
         }
     }
 
-    function maybeUpgradeStation (station) {
-        if (Math.random() < 0.02) {
-            let city = getCity(station.position);
-            if (!city) return;
-            city.size += 1;
-        }
-    }
-
     function loop () {
         update();
         moneyElem.textContent = state.money;
 
-        if (state.redrawBackground) drawBackground();
+        if (state.redrawBackground || handleViewMove()) drawBackground();
         drawOverlay();
 
         requestAnimationFrame(loop);
     }
 
     function drawOverlay () {
+        overlayContext.setTransform(1, 0, 0, 1, 0, 0);
         overlayContext.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        overlayContext.scale(state.zoom, state.zoom);
+        overlayContext.translate(-state.viewCoords.x, -state.viewCoords.y);
+        
         drawCities();
         drawRails();
         drawStations();
         drawTransports();
-        drawCurrentRail();
         drawCityDetails();
+
+        // Resets transform
+        drawCurrentRail();
+    }
+
+    function handleViewMove () {
+        if (state.movingView) {
+            let cursorDiff = {
+                x: state.lastCursorPosition.x - state.moveStartCursor.x,
+                y: state.lastCursorPosition.y - state.moveStartCursor.y
+            };
+
+            state.viewCoords.x = state.moveStartCoords.x - cursorDiff.x / state.zoom;
+            state.viewCoords.y = state.moveStartCoords.y - cursorDiff.y / state.zoom;
+
+            return true;
+        }
+
+        return false;
     }
 
     function drawTransports () {
@@ -327,11 +350,15 @@
         });
     }
 
+    function cursorPositionToWorldCoords (cursor) {
+        return {x: (cursor.x / state.zoom) + state.viewCoords.x, y: (cursor.y / state.zoom) + state.viewCoords.y };
+    }
+
     function drawCurrentRail () {
         if (!state.lastClickedPoint || !state.lastCursorPosition || !state.addingRails) return;
 
         let from = snapToStationOrCity(state.lastClickedPoint);
-        let to = snapToStationOrCity(state.lastCursorPosition);
+        let to = snapToStationOrCity(cursorPositionToWorldCoords(state.lastCursorPosition));
 
         let cost = railCost(from, to);
         if (isStation(from) && isStation(to) && isConnected(getOrCreateStation(from), getOrCreateStation(to))) cost = 0;
@@ -527,7 +554,6 @@
 
         removeNextStop () {
             let pathElement = this.reverse ? this.path.pop() : this.path.shift();
-            maybeUpgradeStation(pathElement.data);
         }
 
         nextStop () {
@@ -885,16 +911,64 @@
     // event listeners
     window.addEventListener('resize', resize);
     document.addEventListener('keydown', keydown);
+    document.addEventListener('contextmenu', event => event.preventDefault());
+
+    overlayCanvas.addEventListener("mousedown", (event) => {
+        if (event.button !== 2) return;
+
+        let cursor = getCursorPosition(overlayCanvas, event);
+        state.movingView = true;
+        state.moveStartCursor = cursor;
+        state.moveStartCoords.x = state.viewCoords.x;
+        state.moveStartCoords.y = state.viewCoords.y;
+    });
+
+    overlayCanvas.addEventListener("mouseup", (event) => {
+        state.movingView = false;
+    });
+
+    overlayCanvas.addEventListener("mouseleave", (event) => {
+        state.movingView = false;
+    });
+
+    overlayCanvas.addEventListener("wheel", (event) => {
+        if (event.deltaY == 0) return;
+
+        let cursor = getCursorPosition(overlayCanvas, event);
+        let targetWorldCoord = cursorPositionToWorldCoords(cursor);
+
+        state.zoom *= event.deltaY < 0 ? 2 : 0.5;
+        state.redrawBackground = true;
+
+        let cursorRatio = {
+            x: cursor.x / overlayCanvas.width,
+            y: cursor.y / overlayCanvas.height
+        };
+
+        let worldCoordSize = {
+            width: overlayCanvas.width / state.zoom,
+            height: overlayCanvas.height / state.zoom
+        };
+
+        state.viewCoords = {
+            x: targetWorldCoord.x - worldCoordSize.width * cursorRatio.x,
+            y: targetWorldCoord.y - worldCoordSize.height * cursorRatio.y
+        };
+
+        state.moveStartCursor = cursor;
+        state.moveStartCoords.x = state.viewCoords.x;
+        state.moveStartCoords.y = state.viewCoords.y;
+    });
 
     overlayCanvas.addEventListener("click", (event) => {
         let cursor = getCursorPosition(overlayCanvas, event);
         
         if (state.addingRails) {
-            tryAddRail(state.lastClickedPoint, cursor);    
+            tryAddRail(state.lastClickedPoint, cursorPositionToWorldCoords(cursor));    
         }
 
         state.addingRails = !state.addingRails;
-        state.lastClickedPoint = cursor;
+        state.lastClickedPoint = cursorPositionToWorldCoords(cursor);
     });
 
     overlayCanvas.addEventListener("mousemove", () => {
