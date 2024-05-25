@@ -3,10 +3,19 @@
 </head>
 <canvas id="background"></canvas>
 <canvas id="overlay"></canvas>
-<div class="moneycontainer">
-    <img src="money.png">
-    <span class="moneytext">0</span>
+<div class="left-top-container">
+    <div class="budget-container">
+        <img src="images/rail.png">
+        <span class="rail-budget-text">0</span>
+    </div>
+    
+    <!--
+    <div class="budget-container">
+        <img src="images/station.png">
+        <span class="station-budget-text">0</span>
+    </div>-->
 </div>
+
 <div class="speedcontainer">1x</div>
 <style>
     html, body {
@@ -22,11 +31,16 @@
         position:absolute;
     }
 
+    .left-top-container {
+        position:absolute;
+        top:16px;
+        left:16px;
+    }
+
     .speedcontainer {
         position:absolute;
         right:16px;
         top:16px;
-        
         box-sizing: border-box;
         padding:16px;
 
@@ -43,25 +57,21 @@
         user-select: none;
     }
 
-    .moneycontainer {
-        position:absolute;
-        top:16px;
-        left:16px;
-
+    .budget-container {
+        display:inline-block;
         box-sizing: border-box;
         padding:16px;
-        min-width:140px;
 
         text-align: right;
         font-weight: bold;
-        color:#6d6509;
+        color:#d7d7d7;
         font-size:32px;
 
-        background:#d7bc29;
+        background:#353333c9;
         box-shadow: 0px 3px 15px rgba(0,0,0,0.2);
     }
 
-    .moneycontainer img {
+    .budget-container img {
         height: 36px;
         vertical-align: top;
     }
@@ -82,7 +92,10 @@
         stations: [],
         transports: [],
         forests: [],
-        money: 10000,
+        fields: [],
+
+        railBudget: 30,
+        stationBudget: 15,
 
         lastClickedPoint: undefined,
         lastCursorPosition: undefined,
@@ -110,7 +123,7 @@
     const RAIL_RADIUS = 8;
     const SUCTION_RADIUS = 75;
     const TICK_TIME = 1000 / 20;
-    const STATION_COST = 50;
+    const STATION_COST = SUCTION_RADIUS;
     const TRANSPORT_PIXELS_PER_MS = 0.03;
     const DISTANCE_PER_TICK = TICK_TIME * TRANSPORT_PIXELS_PER_MS;
     const RESOURCE_COLLECTION_COOLDOWN_TICKS = 100;
@@ -118,6 +131,17 @@
     const MAX_RAIL_LENGTH = 250;
     const MIN_DISTANCE_BETWEEN_CITIES = SUCTION_RADIUS;
     const INITIAL_FOREST_SIZE = 150;
+    const TRANSPORT_SIZE = 16;
+
+    const IMAGES = {
+        "🏔️": "images/boulder.png"
+    };
+
+    for (var key in IMAGES) {
+        let img = new Image();
+        img.src = IMAGES[key];
+        IMAGES[key] = img;
+    }
 
     let backgroundCanvas = document.querySelector("#background");
     let backgroundContext = backgroundCanvas.getContext("2d");
@@ -125,7 +149,8 @@
     let overlayCanvas = document.querySelector("#overlay");
     let overlayContext = overlayCanvas.getContext("2d");
 
-    let moneyElem = document.querySelector(".moneytext");
+    let railBudgetText = document.querySelector(".rail-budget-text");
+    let stationBudgetText = document.querySelector(".station-budget-text");
     let speedContainer = document.querySelector(".speedcontainer");
     
     // Functions
@@ -147,6 +172,7 @@
         drawMountains();
         drawSnow();
         drawTrees();
+        drawFields();
         state.redrawBackground = false;
     }
 
@@ -160,10 +186,6 @@
             state.lastTick += TICK_TIME;
             diff -= TICK_TIME;
         }
-    }
-
-    function randomElement (array) {
-        return array[Math.floor(Math.random() * array.length)];
     }
 
     function updateTick () {
@@ -183,7 +205,8 @@
 
     function loop () {
         update();
-        moneyElem.textContent = state.money;
+        railBudgetText.textContent = state.railBudget;
+        stationBudgetText.textContent = state.stationBudget;
 
         if (state.redrawBackground || handleViewMove()) drawBackground();
         drawOverlay();
@@ -202,8 +225,6 @@
         drawStations();
         drawTransports();
         drawCityDetails();
-
-        // Resets transform
         drawCurrentRail();
     }
 
@@ -226,6 +247,8 @@
     function drawTransports () {
         overlayContext.beginPath();
         state.transports.forEach(transport => {
+            if (IMAGES[transport.type]) return drawTransport(transport);
+
             overlayContext.font = "bold 14px Arial";
             overlayContext.fillStyle = '#292828';
             var size = overlayContext.measureText(transport.type);
@@ -233,6 +256,16 @@
             overlayContext.fillText(transport.type, transport.position.x - size.width / 2, transport.position.y + height / 2);
         });
         overlayContext.fill();
+    }
+
+    function drawTransport (transport) {
+        overlayContext.drawImage(
+            IMAGES[transport.type],
+            transport.position.x - TRANSPORT_SIZE / 2,
+            transport.position.y - TRANSPORT_SIZE / 2,
+            TRANSPORT_SIZE,
+            TRANSPORT_SIZE
+        );
     }
 
     function drawCities () {
@@ -254,7 +287,7 @@
             else if (elements[e] == 2) stringArray.push(e + e);
             else stringArray.push(elements[e] + e);
         }
-        return stringArray.join(", ");
+        return stringArray.join(" ");
     }
 
     function drawCityDetails () {
@@ -296,6 +329,16 @@
             backgroundContext.moveTo(tree.position.x, tree.position.y);
             backgroundContext.arc(tree.position.x, tree.position.y, TREE_RADIUS, 0, 2 * Math.PI, false);
             backgroundContext.fillStyle = '#2f771d';
+        });
+        backgroundContext.fill();
+    }
+
+    function drawFields () {
+        backgroundContext.beginPath();
+        state.fields.forEach(field => {
+            backgroundContext.moveTo(field.position.x, field.position.y);
+            backgroundContext.rect(field.position.x - field.size / 2, field.position.y - field.size / 2, field.size, field.size);
+            backgroundContext.fillStyle = '#e1be04';
         });
         backgroundContext.fill();
     }
@@ -361,7 +404,6 @@
         let to = snapToStationOrCity(cursorPositionToWorldCoords(state.lastCursorPosition));
 
         let cost = railCost(from, to);
-        if (isStation(from) && isStation(to) && isConnected(getOrCreateStation(from), getOrCreateStation(to))) cost = 0;
 
         drawSuctionZonesWithoutFill();
         overlayContext.moveTo(from.x, from.y);
@@ -379,33 +421,27 @@
         overlayContext.lineTo(to.x, to.y);
         overlayContext.lineWidth = 5;
         overlayContext.setLineDash([20, 5]);
-        overlayContext.strokeStyle = !validNewRail(from, to) ? 'red' : '#534d4d';
+        overlayContext.strokeStyle = !validNewRail(from, to) || state.railBudget < cost.rail ? 'red' : '#312828';
         overlayContext.stroke();
 
         overlayContext.beginPath();
         overlayContext.moveTo(from.x, from.y);
         overlayContext.arc(from.x, from.y, RAIL_RADIUS, 0, 2 * Math.PI, false);
-        overlayContext.fillStyle = isStation(from) || validNewStation(from) ? '#282121' : 'red';
+        overlayContext.fillStyle = isStation(from) || (validNewStation(from) && state.stationBudget > cost.station) ? '#282121' : 'red';
         overlayContext.fill();
 
         overlayContext.beginPath();
         overlayContext.moveTo(to.x, to.y);
         overlayContext.arc(to.x, to.y, RAIL_RADIUS, 0, 2 * Math.PI, false);
-        overlayContext.fillStyle = isStation(to) || validNewStation(to) ? '#282121' : 'red';
-        overlayContext.fill();
-
-        overlayContext.beginPath();
-        overlayContext.font = "24px Fantasy";
-        overlayContext.fillStyle = state.money < cost ? 'red' : '#534d4d';
-        overlayContext.fillText(cost + "$", to.x, to.y - 30);
+        overlayContext.fillStyle = isStation(to) || (validNewStation(to) && state.stationBudget > cost.station) ? '#282121' : 'red';
         overlayContext.fill();
     }
 
     function railCost (from, to) {
-        let cost = Math.ceil(distance(from, to));
-        if (!isStation(from) && !isCity(from)) cost += STATION_COST;
-        if (!isStation(to) && !isCity(to)) cost += STATION_COST;
-        return cost;
+        /*let station = 0;
+        if (!isStation(from) && !isCity(from)) station += 1;
+        if (!isStation(to) && !isCity(to)) station += 1;*/
+        return { rail: 1, station: 0};
     }
 
     function getCursorPosition (canvas, event) {
@@ -507,7 +543,7 @@
         if (!validNewRail(from, to)) return;
 
         let cost = railCost(from, to);
-        if (state.money < cost) return;
+        if (state.railBudget < cost.rail || state.stationBudget < cost.station) return;
 
         let fromStation = getOrCreateStation(from);
         let toStation = getOrCreateStation(to);
@@ -518,7 +554,8 @@
         fromStation.rails.push(state.rails[newLength - 1]);
         toStation.rails.push(state.rails[newLength - 1]);
         graph.addLink(nodeName(fromStation), nodeName(toStation), { distance: distance(fromStation.position, toStation.position )});
-        state.money -= cost;
+        state.railBudget -= cost.rail;
+        state.stationBudget -= cost.station;
     }
 
     class Transport {
@@ -621,7 +658,9 @@
                 resource == "💧" ?
                 findWater(this.position) :
                 resource == "🏔️" ?
-                findStone(this.position) : [];
+                findStone(this.position) : 
+                resource == "🌽" ?
+                findCorn(this.position) : [];
 
             if (!path || path.length == 0) return false;
             createTransport(resource, path, this);
@@ -631,6 +670,10 @@
         addRequests () {
             if (this.requests.filter(r => r == "🌳").length < 9 && this.requestChance())
                 this.requests.push("🌳");
+
+                
+            if (this.requests.filter(r => r == "🌽").length < 3 && this.requestChance() && this.size > 100)
+                this.requests.push("🌽");
 
             if (this.requests.filter(r => r == "💧").length < 3 && this.requestChance() && this.size > 200)
                 this.requests.push("💧");
@@ -695,6 +738,23 @@
         while (toCheck.length > 0) {
             var station = toCheck.shift();
             if (stoneNearStation(station)) return getPath(originalStation, station);
+            checked.add(station);
+            toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
+        }
+
+        return false;
+    }
+
+    function findCorn (position) {
+        if (!isStation(position)) return;
+
+        let originalStation = getOrCreateStation(position);
+        let checked = new Set();
+        let toCheck = [originalStation];
+
+        while (toCheck.length > 0) {
+            var station = toCheck.shift();
+            if (cornNearStation(station)) return getPath(originalStation, station);
             checked.add(station);
             toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
         }
@@ -783,6 +843,18 @@
         }
     }
 
+    function cornNearStation (station) {
+        if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
+
+        for (let i = 0; i < state.fields.length; i++) {
+            let field = state.fields[i];
+            if (distance(field.position, station.position) < SUCTION_RADIUS + field.size) {
+                station.lastResourceGathered = state.tick;
+                return true;
+            }
+        }
+    }
+
     function waterNearStation (station) {
         if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
 
@@ -842,11 +914,24 @@
         state.redrawBackground = true;
     }
 
+    function cutTreesNear (position, radius) {
+        for (let i = 0; i < state.trees.length; i++) {
+            let tree = state.trees[i];
+            if (distance(tree.position, position) < radius) {
+                state.trees.splice(i, 1);
+                i--;
+            }
+        }
+
+        state.redrawBackground = true;
+    }
+
     function addTree (position) { state.trees.push({ position }); state.redrawBackground = true; }
     function addWater (position, size) { state.water.push({ position, size }); }
     function addMountain (position, size) { state.mountains.push({ position, size }); }
     function addSnow (position, size) { state.snow.push({ position, size }); }
     function addCity (position, size) { state.cities.push(new City(position, size)); }
+    function addField (position, size) { state.fields.push({ position, size }); }
 
     function addForest (forestPosition) {
         state.forests.push({ position: forestPosition })
@@ -905,6 +990,9 @@
     function keydown (event) {
         if(event.key == "Escape") {
             state.addingRails = false;
+        } else if (event.key == " ") {
+            state.viewCoords = { x: 0, y: 0 };
+            state.redrawBackground = true;
         }
     }
 
@@ -960,7 +1048,7 @@
         state.moveStartCursor = cursor;
         state.moveStartCoords.x = state.viewCoords.x;
         state.moveStartCoords.y = state.viewCoords.y;
-    });
+    }, {passive: true});
 
     overlayCanvas.addEventListener("click", (event) => {
         let cursor = getCursorPosition(overlayCanvas, event);
@@ -1081,9 +1169,39 @@
             }
         }
     });
-    
 
     state.cities.forEach(city => cutAllTreesNearCity(city));
+
+    for (let x = 0; x < 3; x++) {
+        for (let y = 0; y < 3; y++) {
+            let position = {
+                x: x * 600 + Math.random() * 300,
+                y: y * 400 + Math.random() * 200
+            }
+            
+            let size = 30;
+
+            let xAmount = 2 + Math.random() * 2;
+            let yAmount = 1 + Math.random() * 2;
+            for (let smallX = 0; smallX < xAmount; smallX++) {
+                for (let smallY = 0; smallY < yAmount   ; smallY++) {
+                    let realPosition = {
+                        x: position.x + smallX * size * 1.1 + size * (Math.random() * 0.15),
+                        y: position.y + smallY * size * 1.1 + size * (Math.random() * 0.15)
+                    };
+
+                    let realSize = size * Math.random() * 0.1 + size * 0.9;
+
+                    if (!isWater(realPosition, realSize) && !isSnow(realPosition, realSize) && !isMountain(realPosition, realSize) && !getCity(realPosition, realSize)) {
+                        addField(realPosition, realSize);
+                        cutTreesNear(realPosition, realSize * 1.3);
+                    }
+                }
+            } 
+
+            
+        }
+    }
 
     resize();
     requestAnimationFrame(loop);
