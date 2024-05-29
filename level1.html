@@ -1,0 +1,1369 @@
+<head>
+    <meta charset="UTF-8">
+</head>
+<canvas id="background"></canvas>
+<canvas id="overlay"></canvas>
+<div class="left-top-container">
+    <div class="budget-container ui-container">
+        <img src="images/rail.png">
+        <span class="rail-budget-text">0</span>
+    </div>
+    
+    <!--
+    <div class="budget-container">
+        <img src="images/station.png">
+        <span class="station-budget-text">0</span>
+    </div>-->
+</div>
+
+<div class="middle-top ui-container">
+    🧑
+    <span class="population-text">0</span>
+</div>
+
+<div class="left-arrow ui-button">&lt;</div>
+<div class="right-arrow ui-button">&gt</div>
+
+<div class="speedcontainer">1x</div>
+<style>
+    html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        max-width:100%;
+        max-height:100%;
+        background:#45b329;
+        font-family: fantasy;
+    }
+
+    canvas {
+        position:absolute;
+    }
+
+    .left-top-container {
+        position:absolute;
+        top:16px;
+        left:16px;
+    }
+
+    .middle-top {
+        position:absolute;
+        top:16px;
+        left:50%;
+        transform:translate(-50%);
+    }
+
+    .ui-button {
+        display:inline-block;
+        box-sizing: border-box;
+        padding:16px;
+
+        cursor:pointer;
+
+        font-weight: bold;
+        color:#d7d7d7;
+        font-size:32px;
+
+        background:#353333c9;
+        box-shadow: 0px 3px 15px rgba(0,0,0,0.2);
+
+        -webkit-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+    }
+    
+    .right-arrow {
+        position: absolute;
+        right:0;
+        top:50%;
+    }
+    
+    .left-arrow {
+        position: absolute;
+        left:0;
+        top:50%;
+        opacity: 0.2;
+    }
+
+    .speedcontainer {
+        position:absolute;
+        right:16px;
+        top:16px;
+        box-sizing: border-box;
+        padding:16px;
+
+        background:#cddc39;
+        box-shadow: 0px 3px 15px rgba(0,0,0,0.2);
+
+        font-size:32px;
+        font-weight: bold;
+        color:#415d23;
+
+        cursor:pointer;
+        -webkit-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+    }
+
+    .ui-container {
+        display:inline-block;
+        box-sizing: border-box;
+        padding:16px;
+
+        font-weight: bold;
+        color:#d7d7d7;
+        font-size:32px;
+
+        background:#353333c9;
+        box-shadow: 0px 3px 15px rgba(0,0,0,0.2);
+    }
+
+    .budget-container img {
+        height: 36px;
+        vertical-align: top;
+    }
+</style>
+<script src='libraries/ngraph.graph.min.js'></script>
+<script src='libraries/ngraph.path.min.js'></script>
+<script>
+    // Globals
+    let state = {
+        speed: 1,
+        rails: [],
+        trees: [],
+        water: [],
+        cities: [],
+        mountains: [],
+        snow: [],
+        stations: [],
+        transports: [],
+        forests: [],
+        fields: [],
+        industries: [],
+
+        railBudget: 15,
+        stationBudget: 15,
+
+        lastClickedPoint: undefined,
+        lastCursorPosition: undefined,
+        addingRails: false,
+        lastTick: Date.now(),
+        tick: 0,
+
+        viewCoords: { x: 0, y: 0 },
+        targetCoords: { x: 0, y: 0 },
+        zoom: 1
+    };
+
+    let graph = createGraph();
+    let pathFinder = ngraphPath.nba(graph, {
+        distance(fromNode, toNode, link) {
+            return link.data.distance;
+        },
+        heuristic(fromNode, toNode) {
+            return distance(fromNode.data.position, toNode.data.position);
+        }
+    });
+
+    const RAIL_RADIUS = 8;
+    const SUCTION_RADIUS = 75;
+    const TICK_TIME = 1000 / 20;
+    const STATION_COST = SUCTION_RADIUS;
+    const TRANSPORT_PIXELS_PER_MS = 0.03;
+    const DISTANCE_PER_TICK = TICK_TIME * TRANSPORT_PIXELS_PER_MS;
+    const RESOURCE_COLLECTION_COOLDOWN_TICKS = 100;
+    const FIELD_COOLDOWN_TICKS = 400;
+    const TREE_RADIUS = 5;
+    const MAX_RAIL_LENGTH = 250;
+    const MIN_DISTANCE_BETWEEN_CITIES = SUCTION_RADIUS;
+    const TRANSPORT_SIZE = 16;
+    const VIEW_MOVE_RATIO = 5;
+    const MIRROR_X = 2500;
+    const MIRROR_Y = 500;
+
+    const IMAGES = {
+        "🏔️": "images/boulder.png",
+        "LUMBER": "images/lumber.png",
+        "🌳":"images/tree.png"
+    };
+
+    for (var key in IMAGES) {
+        let img = new Image();
+        img.src = IMAGES[key];
+        IMAGES[key] = img;
+    }
+
+    let backgroundCanvas = document.querySelector("#background");
+    let backgroundContext = backgroundCanvas.getContext("2d");
+
+    let leftArrow = document.querySelector(".left-arrow");
+    let rightArrow = document.querySelector(".right-arrow");
+
+    let overlayCanvas = document.querySelector("#overlay");
+    let overlayContext = overlayCanvas.getContext("2d");
+
+    let railBudgetText = document.querySelector(".rail-budget-text");
+    let populationText = document.querySelector(".population-text");
+    let stationBudgetText = document.querySelector(".station-budget-text");
+    let speedContainer = document.querySelector(".speedcontainer");
+    
+    // Functions
+    function setView () {
+        backgroundCanvas.width = window.innerWidth;
+        backgroundCanvas.height = window.innerHeight;
+        overlayCanvas.width = window.innerWidth;
+        overlayCanvas.height = window.innerHeight;
+    
+        state.redrawBackground = true;
+        state.zoom = window.innerHeight / (MIRROR_Y * 2);
+    }
+
+    function drawBackground () {
+        backgroundContext.setTransform(1, 0, 0, 1, 0, 0);
+        backgroundContext.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+        backgroundContext.scale(state.zoom, state.zoom);
+        backgroundContext.translate(-state.viewCoords.x, -state.viewCoords.y);
+
+        drawWater();
+        drawMountains();
+        drawSnow();
+        drawTrees();
+
+        state.redrawBackground = false;
+    }
+
+    function update () {
+        let diff = Date.now() - state.lastTick;
+        let started = Date.now();
+
+        while (diff >= TICK_TIME && Date.now() - started < 100) {
+            for (var i = 0; i < state.speed; i++) updateTick();
+            calculateView();
+            
+            state.lastTick += TICK_TIME;
+            diff -= TICK_TIME;
+        }
+    }
+
+    function updateTick () {
+        state.tick++;
+
+        state.cities.forEach(city => city.tick());
+        state.transports.forEach(transport => transport.tick());
+
+        // Remove delivered transports
+        for (var i = 0; i < state.transports.length; i++) {
+            if (state.transports[i].delivered) {
+                state.transports.splice(i, 1);
+                i--;
+            }
+        }
+    }
+
+    function loop () {
+        update();
+        railBudgetText.textContent = state.railBudget;
+        populationText.textContent = state.cities.reduce((accumulator, element) => accumulator + element.size, 0);
+        //stationBudgetText.textContent = state.stationBudget;
+
+        if (state.redrawBackground) drawBackground();
+        drawOverlay();
+
+        requestAnimationFrame(loop);
+    }
+
+    function calculateView () {
+        if (state.targetCoords.x >= MIRROR_X * 2 - window.innerWidth / state.zoom) {
+            state.targetCoords.x = MIRROR_X * 2 - window.innerWidth / state.zoom;
+            rightArrow.style.opacity = 0.2;
+        } else {
+            rightArrow.style.opacity = 1;
+        }
+
+        if (state.targetCoords.x <= 0) {
+            state.targetCoords.x = 0;
+            leftArrow.style.opacity = 0.2;
+        } else {
+            leftArrow.style.opacity = 1;
+        }
+
+        let xDiff = clamp(state.targetCoords.x - state.viewCoords.x, -100, 100);
+        let yDiff = clamp(state.targetCoords.y - state.viewCoords.y, -100, 100);
+        
+        state.viewCoords.x += xDiff;
+        state.viewCoords.y += yDiff;
+
+        state.redrawBackground = xDiff != 0 || yDiff != 0 || state.redrawBackground;
+    }
+
+    function drawOverlay () {
+        overlayContext.setTransform(1, 0, 0, 1, 0, 0);
+        overlayContext.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        overlayContext.scale(state.zoom, state.zoom);
+        overlayContext.translate(-state.viewCoords.x, -state.viewCoords.y);
+        
+        drawFields();
+        drawCities();
+        drawIndustries();
+        drawRails();
+        drawStations();
+        drawTransports();
+        drawIndustryDetails();
+        drawCityDetails();
+        drawCurrentRail();
+    }
+
+    function clamp (value, min, max) {
+        return Math.max(Math.min(value, max), min);
+    }
+
+    function drawTransports () {
+        overlayContext.beginPath();
+        state.transports.forEach(transport => {
+            if (IMAGES[transport.type]) return drawTransport(transport);
+
+            overlayContext.font = "bold 14px Arial";
+            overlayContext.fillStyle = '#292828';
+            var size = overlayContext.measureText(transport.type);
+            var height = size.actualBoundingBoxAscent + size.actualBoundingBoxDescent;
+            overlayContext.fillText(transport.type, transport.position.x - size.width / 2, transport.position.y + height / 2);
+        });
+        overlayContext.fill();
+    }
+
+    function drawTransport (transport) {
+        overlayContext.drawImage(
+            IMAGES[transport.type],
+            transport.position.x - TRANSPORT_SIZE / 2,
+            transport.position.y - TRANSPORT_SIZE / 2,
+            TRANSPORT_SIZE,
+            TRANSPORT_SIZE
+        );
+    }
+
+    function drawCities () {
+        overlayContext.beginPath();
+        state.cities.forEach(city => {
+            overlayContext.moveTo(city.position.x, city.position.y);
+            overlayContext.arc(city.position.x, city.position.y, city.renderSize(), 0, 2 * Math.PI, false);
+        });
+        overlayContext.fillStyle = '#b1b7b0';
+        overlayContext.fill();
+    }
+
+    function drawIndustries () {
+        overlayContext.beginPath();
+        state.industries.forEach(industry => {
+            overlayContext.rect(industry.position.x - 8, industry.position.y - 8, 16, 16);
+        });
+        overlayContext.fillStyle = '#634949';
+        overlayContext.fill();
+    }
+
+    function drawIndustryDetails () {
+        overlayContext.beginPath();
+        state.industries.forEach(industry => {
+            let offers = countElements(industry.offers);
+            let requests = countElements(industry.requests);
+
+            for (var resource in offers) {
+                overlayContext.drawImage(IMAGES[resource], industry.position.x - 10, industry.position.y - 20 - 15, 20, 20);
+            }
+
+            for (var resource in requests) {
+                overlayContext.drawImage(IMAGES[resource], industry.position.x - 10, industry.position.y + 20, 20, 20);
+            }
+
+            overlayContext.font = "bold 20px Arial";
+            overlayContext.fillStyle = 'white';
+            overlayContext.fillText(industry.requests.length > 0 ? "?" : "", industry.position.x + 10, industry.position.y + 36);
+            overlayContext.fillText(industry.offers.length > 0 ? "?" : "", industry.position.x + 10, industry.position.y - 20);
+        });
+        overlayContext.fill();
+    }
+
+    function countElements (array) {
+        let elements = {};
+        array.forEach((e) => {elements[e] = elements[e] || 0; elements[e]++});
+        return elements;
+    }
+
+    function countElementsAsString (array) {
+        let elements = {};
+        let stringArray = [];
+        array.forEach((e) => {elements[e] = elements[e] || 0; elements[e]++});
+        for (var e in elements) {
+            if (elements[e] == 1) stringArray.push(e);
+            else if (elements[e] == 2) stringArray.push(e + e);
+            else stringArray.push(elements[e] + e);
+        }
+        return stringArray.join(" ");
+    }
+
+    function drawCityDetails () {
+        overlayContext.beginPath();
+        state.cities.forEach(city => {
+            let offerText = city.size + "🧑";
+            let requestText = city.requests.length > 0 ? countElementsAsString(city.requests) + "?" : "";
+            overlayContext.font = "bold 20px Arial";
+            overlayContext.fillStyle = 'white';
+            overlayContext.fillText(offerText, city.position.x - (overlayContext.measureText(offerText).width / 2), city.position.y - 5 - city.renderSize());
+            overlayContext.fillText(requestText, city.position.x - (overlayContext.measureText(requestText).width / 2), city.position.y + 14 + city.renderSize());
+        });
+        overlayContext.fill();
+    }
+
+    function drawSnow () {
+        backgroundContext.beginPath();
+        state.snow.forEach(snow => {
+            backgroundContext.moveTo(snow.position.x, snow.position.y);
+            backgroundContext.arc(snow.position.x, snow.position.y, snow.size, 0, 2 * Math.PI, false);
+            backgroundContext.fillStyle = 'white';
+        });
+        backgroundContext.fill();
+    }
+
+    function drawMountains () {
+        backgroundContext.beginPath();
+        state.mountains.forEach(mountain => {
+            backgroundContext.moveTo(mountain.position.x, mountain.position.y);
+            backgroundContext.arc(mountain.position.x, mountain.position.y, mountain.size, 0, 2 * Math.PI, false);
+            backgroundContext.fillStyle = '#827b83';
+        });
+        backgroundContext.fill();
+    }
+
+    function drawTrees () {
+        backgroundContext.beginPath();
+        state.trees.forEach(tree => {
+            backgroundContext.moveTo(tree.position.x, tree.position.y);
+            backgroundContext.arc(tree.position.x, tree.position.y, TREE_RADIUS, 0, 2 * Math.PI, false);
+            backgroundContext.fillStyle = '#2f771d';
+        });
+        backgroundContext.fill();
+    }
+
+    function drawFields () {
+        state.fields.forEach(field => {
+            //let ratio = clamp((state.tick - field.lastResourceGathered) / FIELD_COOLDOWN_TICKS, 0, 1);
+            let available = state.tick - field.lastResourceGathered > FIELD_COOLDOWN_TICKS;
+
+            overlayContext.beginPath();
+            overlayContext.moveTo(field.position.x, field.position.y);
+            overlayContext.rect(field.position.x - field.size / 2, field.position.y - field.size / 2, field.size, field.size);
+            overlayContext.fillStyle = available ? '#e1be04' : "#9b5e1f";
+            overlayContext.fill();
+
+            /*overlayContext.beginPath();
+            overlayContext.moveTo(field.position.x, field.position.y);
+            overlayContext.rect(field.position.x - field.size / 2, field.position.y - field.size / 2, field.size, ratio * field.size);
+            overlayContext.fillStyle = '#e1be04';
+            overlayContext.fill();*/
+
+
+        });
+    }
+
+    function drawWater () {
+        backgroundContext.beginPath();
+        state.water.forEach(water => {
+            backgroundContext.moveTo(water.position.x, water.position.y);
+            backgroundContext.arc(water.position.x, water.position.y, water.size, 0, 2 * Math.PI, false);
+            backgroundContext.fillStyle = '#03a9f4';
+        });
+        backgroundContext.fill();
+    }
+
+    function drawStations () {
+        overlayContext.beginPath();
+        state.stations.forEach(station => {
+            ratio = (RESOURCE_COLLECTION_COOLDOWN_TICKS - (state.tick - station.lastResourceGathered)) / RESOURCE_COLLECTION_COOLDOWN_TICKS;
+            if (ratio < 0) ratio = 0;
+            overlayContext.moveTo(station.position.x, station.position.y);
+            overlayContext.arc(station.position.x, station.position.y, RAIL_RADIUS + 4, 0, 2 * Math.PI * ratio, false);
+        });
+        overlayContext.fillStyle = 'white';
+        overlayContext.fill();
+
+        overlayContext.beginPath();
+        state.stations.forEach(station => {
+            overlayContext.moveTo(station.position.x, station.position.y);
+            overlayContext.arc(station.position.x, station.position.y, RAIL_RADIUS, 0, 2 * Math.PI, false);
+        });
+        overlayContext.fillStyle = '#282121';
+        overlayContext.fill();
+    }
+
+    function drawRails () {
+        overlayContext.beginPath();
+        state.rails.forEach(rail => {
+            overlayContext.moveTo(rail.from.position.x, rail.from.position.y);
+            overlayContext.lineTo(rail.to.position.x, rail.to.position.y);
+        });
+        overlayContext.lineWidth = 5;
+        overlayContext.setLineDash([20, 5]);
+        overlayContext.strokeStyle = '#282121';
+        overlayContext.stroke();
+    }
+
+    function drawSuctionZonesWithoutFill () {
+        overlayContext.beginPath();
+        state.stations.forEach(station => {
+            overlayContext.moveTo(station.position.x, station.position.y);
+            overlayContext.arc(station.position.x, station.position.y, SUCTION_RADIUS, 0, 2 * Math.PI, false);
+        });
+    }
+
+    function cursorPositionToWorldCoords (cursor) {
+        return {x: (cursor.x / state.zoom) + state.viewCoords.x, y: (cursor.y / state.zoom) + state.viewCoords.y };
+    }
+
+    function drawCurrentRail () {
+        if (!state.lastClickedPoint || !state.lastCursorPosition || !state.addingRails) return;
+
+        let from = snapToStationOrCity(state.lastClickedPoint);
+        let to = snapToStationOrCity(cursorPositionToWorldCoords(state.lastCursorPosition));
+
+        let cost = railCost(from, to);
+
+        drawSuctionZonesWithoutFill();
+        overlayContext.moveTo(from.x, from.y);
+        overlayContext.arc(from.x, from.y, SUCTION_RADIUS, 0, 2 * Math.PI, false);
+        overlayContext.fillStyle = '#0000ff50';
+        overlayContext.fill();
+        overlayContext.beginPath();
+        overlayContext.moveTo(to.x, to.y);
+        overlayContext.arc(to.x, to.y, SUCTION_RADIUS, 0, 2 * Math.PI, false);
+        overlayContext.fillStyle = '#0000ff50';
+        overlayContext.fill();
+
+        overlayContext.beginPath();
+        overlayContext.moveTo(from.x, from.y);
+        overlayContext.lineTo(to.x, to.y);
+        overlayContext.lineWidth = 5;
+        overlayContext.setLineDash([20, 5]);
+        overlayContext.strokeStyle = !validNewRail(from, to) || state.railBudget < cost.rail ? 'red' : '#312828';
+        overlayContext.stroke();
+
+        overlayContext.beginPath();
+        overlayContext.moveTo(from.x, from.y);
+        overlayContext.arc(from.x, from.y, RAIL_RADIUS, 0, 2 * Math.PI, false);
+        overlayContext.fillStyle = isStation(from) || (validNewStation(from) && state.stationBudget > cost.station) ? '#282121' : 'red';
+        overlayContext.fill();
+
+        let problemStation = getStation(from, MIN_DISTANCE_BETWEEN_CITIES);
+        if (!isStation(from) && problemStation) {
+            overlayContext.beginPath();
+            overlayContext.moveTo(problemStation.position.x, problemStation.position.y);
+            overlayContext.arc(problemStation.position.x, problemStation.position.y, SUCTION_RADIUS, 0, 2 * Math.PI, false);
+            overlayContext.fillStyle = '#ff000080';
+            overlayContext.fill();
+        }
+        
+        overlayContext.beginPath();
+        overlayContext.moveTo(to.x, to.y);
+        overlayContext.arc(to.x, to.y, RAIL_RADIUS, 0, 2 * Math.PI, false);
+        overlayContext.fillStyle = isStation(to) || (validNewStation(to) && state.stationBudget > cost.station) ? '#282121' : 'red';
+        overlayContext.fill();
+
+        problemStation = getStation(to, MIN_DISTANCE_BETWEEN_CITIES);
+        if (!isStation(to) && problemStation) {
+            overlayContext.beginPath();
+            overlayContext.moveTo(problemStation.position.x, problemStation.position.y);
+            overlayContext.arc(problemStation.position.x, problemStation.position.y, SUCTION_RADIUS, 0, 2 * Math.PI, false);
+            overlayContext.fillStyle = '#ff000080';
+            overlayContext.fill();
+        }
+    }
+
+    function railCost (from, to) {
+        /*let station = 0;
+        if (!isStation(from) && !isCity(from)) station += 1;
+        if (!isStation(to) && !isCity(to)) station += 1;*/
+        return { rail: 1, station: 0};
+    }
+
+    function getCursorPosition (canvas, event) {
+        const rect = canvas.getBoundingClientRect()
+        const x = event.clientX - rect.left
+        const y = event.clientY - rect.top
+        return { x, y };
+    }
+
+    function distance (p1, p2) {
+        let a = p1.x - p2.x;
+        let b = p1.y - p2.y;
+        return Math.sqrt(a * a + b * b);
+    }
+
+    function isCity (point) {
+        for (let i = 0; i < state.cities.length; i++) {
+            if (distance(point, state.cities[i].position) < 1) return true;
+        }
+
+        return false;
+    }
+
+    function isStation (point) {
+        for (let i = 0; i < state.stations.length; i++) {
+            if (distance(point, state.stations[i].position) < 1) return true;
+        }
+
+        return false;
+    }
+
+    function getStation (point, within) {
+        for (let i = 0; i < state.stations.length; i++) {
+            let station = state.stations[i];
+            if (distance(point, station.position) < (within || 1)) return station;
+        }
+    }
+
+    function getOrCreateStation (point) {
+        for (let i = 0; i < state.stations.length; i++) {
+            let station = state.stations[i];
+            if (distance(point, station.position) < 1) return station;
+        }
+
+        let station = new Station(point);
+        state.stations.push(station);
+        graph.addNode(nodeName(station), station);
+        return station;
+    }
+
+    function getCity (position, within) {
+        for (let i = 0; i < state.cities.length; i++) {
+            let city = state.cities[i];
+            if (distance(position, city.position) < (within || 1)) return city;
+        }
+    }
+
+    function snapToStationOrCity (point) {
+        for (let i = 0; i < state.stations.length; i++) {
+            let station = state.stations[i];
+            if (distance(station.position, point) < RAIL_RADIUS * 2) { return station.position; }
+        }
+
+        for (let i = 0; i < state.cities.length; i++) {
+            let city = state.cities[i];
+            if (distance(city.position, point) < city.renderSize() + RAIL_RADIUS) { return city.position; }
+        }
+        
+        return point;
+    }
+
+    function nodeName (station) {
+        return station.position.x + "x" + station.position.y;
+    }
+
+    function validNewStation (point) {
+        if (isCity(point)) return true;
+        if (isWater(point) || (isMountain(point) && !isSnow(point))) return false;
+        if (getStation(point, MIN_DISTANCE_BETWEEN_CITIES)) return false;
+        return true;
+    }
+
+    function validNewRail (from, to) {
+        let fromIsStation = isStation(from);
+        let toIsStation = isStation(to);
+        let length = distance(from, to);
+
+        if (length > MAX_RAIL_LENGTH) return false;
+        if (!fromIsStation && !validNewStation(from)) return false;
+        if (!toIsStation && !validNewStation(to)) return false;
+
+        return true;
+    }
+
+    function tryAddRail (from, to) {
+        from = snapToStationOrCity(from);
+        to = snapToStationOrCity(to);
+
+        if (!validNewRail(from, to)) return;
+
+        let cost = railCost(from, to);
+        if (state.railBudget < cost.rail || state.stationBudget < cost.station) return;
+
+        let fromStation = getOrCreateStation(from);
+        let toStation = getOrCreateStation(to);
+
+        if (isConnected(fromStation, toStation)) return;
+
+        var newLength = state.rails.push({ from: fromStation, to: toStation });
+        fromStation.rails.push(state.rails[newLength - 1]);
+        toStation.rails.push(state.rails[newLength - 1]);
+        graph.addLink(nodeName(fromStation), nodeName(toStation), { distance: distance(fromStation.position, toStation.position )});
+        state.railBudget -= cost.rail;
+        state.stationBudget -= cost.station;
+    }
+
+    class Transport {
+        constructor (type, path, target, reverse) {
+            this.type = type;
+            this.path = path;
+            this.target = target;
+            this.time = 0;
+            this.position = { x: path[reverse ? path.length - 1 : 0].data.position.x, y: path[reverse ? path.length - 1 : 0].data.position.y};
+            this.delivered = false;
+            this.reverse = reverse;
+        }
+
+        tick () {
+            if (this.delivered) return;
+
+            if (!this.nextStop()) {
+                this.target.deliver(this.type);
+                this.delivered = true;
+                return;
+            }
+
+            let nextStop = this.nextStop();
+            let distanceLeft = distance(this.position, nextStop.data.position);
+            let ratio = DISTANCE_PER_TICK / distanceLeft;
+
+            if (ratio >= 1) this.removeNextStop();
+            else {
+                this.position.x += (nextStop.data.position.x - this.position.x) * ratio;
+                this.position.y += (nextStop.data.position.y - this.position.y) * ratio;
+            }
+        }
+
+        removeNextStop () {
+            let pathElement = this.reverse ? this.path.pop() : this.path.shift();
+        }
+
+        nextStop () {
+            return this.reverse ? this.path[this.path.length - 2] : this.path[1];
+        }
+    }
+
+    class Station {
+        constructor (position) {
+            this.position = position;
+            this.rails = [];
+            this.lastResourceGathered = -RESOURCE_COLLECTION_COOLDOWN_TICKS;
+        }
+    }
+
+    class Industry {
+        constructor (position, requests, offers) {
+            this.position = position;
+            this.requests = requests;
+            this.offers = offers;
+        }
+    }
+
+    class City {
+        constructor (position, size) {
+            this.position = position;
+            this.requests = [];
+            this.offers = [];
+            this.size = size || 50;
+        }
+
+        tick () {
+            this.collectRequests();
+            this.addRequests();
+            this.deliverOffers();
+        }
+
+        deliverOffers () {
+            if (state.tick % 20 == 0 && this.offers.length > 0) {
+                for (var i = 0; i < this.offers.length; i++) {
+                    if (this.deliverOffer(this.offers[i])) break;
+                }
+            }
+        }
+
+        deliverOffer (resource) {
+            var path =
+                resource == "⛷️" ? findSnow(this.position) :
+                resource == "🧑" ? findFunCity(this.position) : [];
+
+            if (!path || path.length == 0) return false;
+            if (resource == "🧑") {
+                this.size += 1;
+                createTransport(resource, path, getCity(path[0].data.position), true);
+            } else {
+                createTransport(resource, path, this, true);
+            }
+            this.offers.splice(this.offers.indexOf(resource), 1);
+        }
+
+        collectRequests () {
+            if (state.tick % 20 == 0 && this.requests.length > 0) {
+                for (var i = 0; i < this.requests.length; i++) {
+                    if (this.collectResource(this.requests[i])) break;
+                }
+            }
+        }
+
+        collectResource (resource) {
+            var path =
+                resource == "🌳" ?
+                findAndCutTree(this.position) :
+                resource == "💧" ?
+                findWater(this.position) :
+                resource == "🏔️" ?
+                findStone(this.position) : 
+                resource == "🌽" ?
+                findCorn(this.position) : [];
+
+            if (!path || path.length == 0) return false;
+            createTransport(resource, path, this);
+            this.requests.splice(this.requests.indexOf(resource), 1);
+        }
+
+        addRequests () {
+            /*if (this.requests.filter(r => r == "🌳").length < 9 && this.requestChance())
+                this.requests.push("🌳");*/
+                
+            if (this.requests.filter(r => r == "🌽").length < 3 && this.requestChance())
+                this.requests.push("🌽");
+
+            /*if (this.requests.filter(r => r == "💧").length < 3 && this.requestChance())
+                this.requests.push("💧");*/
+
+            /*if (this.requests.filter(r => r == "🏔️").length < 3 && this.requestChance() && this.size > 250)
+                this.requests.push("🏔️");*/
+        }
+
+        requestChance () {
+            return Math.random() < 0.005 * Math.log2(this.size) / 3;
+        }
+
+        deliver () {
+            this.size += 1;
+        }
+
+        renderSize () {
+            return Math.min(Math.sqrt(this.size), 30);
+        }
+    }
+
+    function createTransport (type, path, target, reverse) {
+        state.transports.push(new Transport(type, path, target, reverse));
+    }
+
+    function isConnected (station1, station2) {
+        if (station1 == station2) return true;
+        for (var i = 0; i < station1.rails.length; i++) {
+            var rail = station1.rails[i];
+            if (rail.from == station1 && rail.to == station2 ||
+                rail.from == station2 && rail.to == station1) return true;
+        }
+
+        return false;
+    }
+
+    function getConnectedStations (station) {
+        let stations = [];
+
+        for (var i = 0; i < station.rails.length; i++) {
+            if (station.rails[i].from == station) stations.push(station.rails[i].to);
+            else if (station.rails[i].to == station) stations.push(station.rails[i].from);
+        }
+
+        return stations;
+    }
+
+    function getPath (fromStation, toStation) {
+        if (!isStation(fromStation.position) || !isStation(toStation.position))
+            throw new Error(`Argument should be a station, was: ${fromStation} and ${toStation}`);
+
+        if (fromStation == toStation) return [{ data: fromStation }];
+
+        return pathFinder.find(nodeName(fromStation), nodeName(toStation));
+    }
+
+    function findStone (position) {
+        if (!isStation(position)) return;
+
+        let originalStation = getOrCreateStation(position);
+        let checked = new Set();
+        let toCheck = [originalStation];
+
+        while (toCheck.length > 0) {
+            var station = toCheck.shift();
+            if (stoneNearStation(station)) return getPath(originalStation, station);
+            checked.add(station);
+            toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
+        }
+
+        return false;
+    }
+
+    function findCorn (position) {
+        if (!isStation(position)) return;
+
+        let originalStation = getOrCreateStation(position);
+        let checked = new Set();
+        let toCheck = [originalStation];
+
+        while (toCheck.length > 0) {
+            var station = toCheck.shift();
+            if (cornNearStation(station)) return getPath(originalStation, station);
+            checked.add(station);
+            toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
+        }
+
+        return false;
+    }
+
+    function findSnow (position) {
+        if (!isStation(position)) return;
+
+        let originalStation = getOrCreateStation(position);
+        let checked = new Set();
+        let toCheck = [originalStation];
+
+        while (toCheck.length > 0) {
+            var station = toCheck.shift();
+            if (snowNearStation(station)) return getPath(originalStation, station);
+            checked.add(station);
+            toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
+        }
+
+        return false;
+    }
+
+    function findFunCity (position) {
+        if (!isStation(position)) return;
+
+        let originalStation = getOrCreateStation(position);
+        let checked = new Set();
+        let toCheck = [originalStation];
+
+        while (toCheck.length > 0) {
+            var station = toCheck.shift();
+            // Distance check cause original cityStation should not count
+            if (distance(station.position, position) > 1 && cityNearStation(station)) return getPath(originalStation, station);
+            checked.add(station);
+            toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
+        }
+
+        return false;
+    }
+
+    function findWater (position) {
+        if (!isStation(position)) return;
+
+        let originalStation = getOrCreateStation(position);
+        let checked = new Set();
+        let toCheck = [originalStation];
+
+        while (toCheck.length > 0) {
+            var station = toCheck.shift();
+            if (waterNearStation(station)) return getPath(originalStation, station);
+            checked.add(station);
+            toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
+        }
+
+        return false;
+    }
+
+    function findAndCutTree (position) {
+        if (!isStation(position)) return;
+
+        let originalStation = getOrCreateStation(position);
+        let checked = new Set();
+        let toCheck = [originalStation];
+
+        while (toCheck.length > 0) {
+            var station = toCheck.shift();
+            if (cutTreeNearStation(station)) return getPath(originalStation, station);
+            checked.add(station);
+            toCheck.push(...getConnectedStations(station).filter(s => !checked.has(s)))
+        }
+
+        return false;
+    }
+
+    function stoneNearStation (station) {
+        if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
+
+        for (let i = 0; i < state.mountains.length; i++) {
+            let mountain = state.mountains[i];
+            if (distance(mountain.position, station.position) < SUCTION_RADIUS + mountain.size) {
+                station.lastResourceGathered = state.tick;
+                return true;
+            }
+        }
+    }
+
+    function cornNearStation (station) {
+        if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
+
+        for (let i = 0; i < state.fields.length; i++) {
+            let field = state.fields[i];
+            let available = state.tick - field.lastResourceGathered > FIELD_COOLDOWN_TICKS;
+            if (available && distance(field.position, station.position) < SUCTION_RADIUS + field.size) {
+                station.lastResourceGathered = state.tick;
+                field.lastResourceGathered = state.tick;
+                state.redrawBackground = true;
+                return true;
+            }
+        }
+    }
+
+    function waterNearStation (station) {
+        if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
+
+        for (let i = 0; i < state.water.length; i++) {
+            let water = state.water[i];
+            if (distance(water.position, station.position) < SUCTION_RADIUS + water.size) {
+                station.lastResourceGathered = state.tick;
+                return true;
+            }
+        }
+    }
+
+    function cityNearStation (station) {
+        if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
+        if (isCity(station.position)) {
+            station.lastResourceGathered = state.tick;
+            return true;
+        }
+    }
+
+    function snowNearStation (station) {
+        if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
+
+        for (let i = 0; i < state.snow.length; i++) {
+            let snow = state.snow[i];
+            if (distance(snow.position, station.position) < SUCTION_RADIUS + snow.size) {
+                station.lastResourceGathered = state.tick;
+                return true;
+            }
+        }
+    }
+
+    function cutTreeNearStation (station) {
+        if (state.tick - station.lastResourceGathered < RESOURCE_COLLECTION_COOLDOWN_TICKS) return;
+
+        for (let i = 0; i < state.trees.length; i++) {
+            let tree = state.trees[i];
+            if (distance(tree.position, station.position) < SUCTION_RADIUS) {
+                state.trees.splice(i, 1);
+                station.lastResourceGathered = state.tick;
+                state.redrawBackground = true;
+                return true;
+            }
+        }
+    }
+
+    function cutAllTreesNearCity (city) {
+        for (let i = 0; i < state.trees.length; i++) {
+            let tree = state.trees[i];
+            if (distance(tree.position, city.position) < SUCTION_RADIUS) {
+                state.trees.splice(i, 1);
+                i--;
+                city.size += 1;
+            }
+        }
+
+        state.redrawBackground = true;
+    }
+
+    function cutTreesNear (position, radius) {
+        for (let i = 0; i < state.trees.length; i++) {
+            let tree = state.trees[i];
+            if (distance(tree.position, position) < radius) {
+                state.trees.splice(i, 1);
+                i--;
+            }
+        }
+
+        state.redrawBackground = true;
+    }
+
+    function addTree (position) { state.trees.push({ position }); state.redrawBackground = true; }
+    function addWater (position, size) { state.water.push({ position, size }); }
+    function addMountain (position, size) { state.mountains.push({ position, size }); }
+    function addSnow (position, size) { state.snow.push({ position, size }); }
+    function addCity (position, size) { state.cities.push(new City(position, size)); }
+    function addIndustry (position, requests, offers) { state.industries.push(new Industry(position, requests, offers)); }
+    function addField (position, size) { state.fields.push({ position, size, lastResourceGathered: -FIELD_COOLDOWN_TICKS }); }
+
+    function addForest (forestPosition, size) {
+        state.forests.push({ position: forestPosition })
+        
+        for (let i = 0; i < size; i++) {
+            addTreeInForest(forestPosition, i, size);
+        }
+    }
+
+    function addTreeInForest (forestPosition, treeIndex, maxSize) {
+        let offset = 1.5 * 150 * (treeIndex / maxSize);
+
+        let position = {
+            x: Math.round(50 + forestPosition.x + (Math.random() - 0.5) * offset),
+            y: Math.round(50 + forestPosition.y + (Math.random() - 0.5) * offset),
+        };
+
+        if (!isWater(position, TREE_RADIUS) && !isSnow(position, TREE_RADIUS) && !isMountain(position, TREE_RADIUS)) {
+            addTree(position);
+        }
+    }
+
+    function isIndustry (position, size) {
+        if (!size) size = 1;
+
+        for (var i = 0; i < state.industries.length; i++) {
+            if (distance(state.industries[i].position, position) < size)
+                return true;
+        }
+
+        return false;
+    }
+
+    function isWater (position, size) {
+        if (!size) size = 0;
+
+        for (var i = 0; i < state.water.length; i++) {
+            if (distance(state.water[i].position, position) < state.water[i].size + size)
+                return true;
+        }
+
+        return false;
+    }
+
+    function isMountain (position, size) {
+        if (!size) size = 0;
+
+        for (var i = 0; i < state.mountains.length; i++) {
+            let mountain = state.mountains[i];
+            if (distance(mountain.position, position) < mountain.size + size)
+                return true;
+        }
+
+        return false;
+    }
+
+    function isSnow (position, size) {
+        if (!size) size = 0;
+        for (var i = 0; i < state.snow.length; i++) {
+            if (distance(state.snow[i].position, position) < state.snow[i].size + size)
+                return true;
+        }
+
+        return false;
+    }
+
+    function keydown (event) {
+        if(event.key == "Escape") {
+            state.addingRails = false;
+        } else if (event.key == " ") {
+            state.viewCoords = { x: 0, y: 0 };
+            state.redrawBackground = true;
+        }
+    }
+
+    // event listeners
+    window.addEventListener('resize', setView);
+    document.addEventListener('keydown', keydown);
+    document.addEventListener('contextmenu', event => event.preventDefault());
+
+    leftArrow.addEventListener('click', (event) => {
+        state.targetCoords.x -= window.innerWidth / 2;
+        state.targetTime = Date.now();
+        state.redrawBackground = true;
+    });
+
+    rightArrow.addEventListener('click', (event) => {
+        state.targetCoords.x += window.innerWidth / 2;
+        state.targetTime = Date.now();
+        state.redrawBackground = true;
+    });
+
+    overlayCanvas.addEventListener("mouseup", (event) => {
+        state.movingView = false;
+    });
+
+    overlayCanvas.addEventListener("mouseleave", (event) => {
+        state.movingView = false;
+    });
+
+    overlayCanvas.addEventListener("click", (event) => {
+        let cursor = getCursorPosition(overlayCanvas, event);
+        
+        if (state.addingRails) {
+            tryAddRail(state.lastClickedPoint, cursorPositionToWorldCoords(cursor));    
+        }
+
+        state.addingRails = !state.addingRails;
+        state.lastClickedPoint = cursorPositionToWorldCoords(cursor);
+    });
+
+    overlayCanvas.addEventListener("mousemove", () => {
+        state.lastCursorPosition = getCursorPosition(overlayCanvas, event);
+    });
+
+    speedContainer.addEventListener("click", () => {
+        state.speed *= 2;
+        if (state.speed > 8) state.speed = 1;
+        speedContainer.innerHTML = state.speed + "x";
+    });
+
+    // init
+    function mirrorX (position) {
+        return {
+            x: MIRROR_X - (position.x - MIRROR_X),
+            y: MIRROR_Y - (position.y - MIRROR_Y)
+        }
+    }
+
+    // Add some mountains
+    for (let clusterX = 1; clusterX < 5; clusterX++) {
+        for (let clusterY = 0; clusterY < 4; clusterY++) {
+            let clusterCenter = {
+                x: 1300 + clusterX * 300 + Math.random() * 200,
+                y: 25 + clusterY * 300 + Math.random() * 200
+            };
+
+            let sizeModifier = 4 - Math.abs(clusterX - 4);
+            let mountainAmount = 10 + sizeModifier * 20;
+            for (let i = 0; i < mountainAmount; i++) {
+                let position = {
+                    x: Math.round(clusterCenter.x + (Math.random() - 0.5) * i * 2),
+                    y: Math.round(clusterCenter.y + (Math.random() - 0.5) * i * 3),
+                };
+
+                let size = mountainAmount / 1.5 - (i / 2);
+                if (!isWater(position, size)) {
+                    addMountain(position, size);
+                    addMountain(mirrorX(position), size);
+                }
+            }
+
+            let snowAmount = sizeModifier * 10;
+            for (let i = 0; i < snowAmount; i++) {
+                let position = {
+                    x: Math.round(clusterCenter.x + (Math.random() - 0.5) * i * 3),
+                    y: Math.round(clusterCenter.y + (Math.random() - 0.5) * i * 4.5),
+                };
+
+                let size = (snowAmount / 1.5) - (i / 2) + Math.random() * 5;
+
+                if (!isWater(position, size) && isMountain(position, size)) {
+                    addSnow(position, size);
+                    addSnow(mirrorX(position), size);
+                }
+            }
+        }
+    }
+
+    // Add some water
+    for (let clusterX = 0; clusterX < 4; clusterX++) {
+        for (let clusterY = 0; clusterY < 3; clusterY++) {
+            let clusterCenter = {
+                x: clusterX * 400 + Math.random() * 250,
+                y: clusterY * 400 + Math.random() * 250
+            };
+
+            let xShape = 0.7 + Math.random() / 2;
+            let yShape = 0.7 + Math.random() / 2;
+            let lakeSize = 50 + Math.random() * 90;
+
+            for (let i = 0; i < lakeSize; i++) {
+                let position = {
+                    x: Math.round(clusterCenter.x + (Math.random() - 0.5) * i * xShape),
+                    y: Math.round(clusterCenter.y + (Math.random() - 0.5) * i * yShape),
+                };
+
+                let size = 30 - (i / 5);
+                if (!isMountain(position, size) && !isSnow(position, size)) {
+                    addWater(position, size);
+                    addWater(mirrorX(position), size);
+                }
+            }
+        }
+    }
+
+    // Add some trees
+    for (let clusterX = 0; clusterX < 10; clusterX++) {
+        for (let clusterY = 0; clusterY < 5; clusterY++) {
+            let clusterCenter = {
+                x: clusterX * 275 + Math.random() * 175,
+                y: clusterY * 210 + Math.random() * 100
+            };
+
+            let size = 10 + clusterX * 20;
+            addForest(clusterCenter, size);
+            addForest(mirrorX(clusterCenter), size);
+        }
+    }
+
+    let position = {
+        x: 600,
+        y: 600
+    }
+
+    addIndustry(position, ["🌳"], ["LUMBER"]);
+    addIndustry(mirrorX(position), ["🌳"], ["LUMBER"])
+
+    let cityPositions = [
+        { x: 100, xVar: 200, y: 120, yVar: 200},
+        { x: 100, xVar: 300, y: 500, yVar: 300},
+        { x: 250, xVar: 150, y: 200, yVar: 200},
+        { x: 500, xVar: 150, y: 150, yVar: 200},
+        { x: 500, xVar: 200, y: 600, yVar: 150},
+        { x: 1200, xVar: 250, y: 600, yVar: 200},
+        { x: 1200, xVar: 250, y: 300, yVar: 200},
+    ];
+
+    // Add some cities
+    cityPositions.forEach((pos) => {
+        for (var i = 0; i < 10; i++) {
+            let position = {
+                x: Math.round(pos.x + Math.random() * pos.xVar),
+                y: Math.round(pos.y + Math.random() * pos.yVar)
+            };
+
+            if (!isWater(position) && !isSnow(position, 10) && !isMountain(position) && !getCity(position, SUCTION_RADIUS * 2) && !isIndustry(position, SUCTION_RADIUS)) {
+                addCity(position);
+                getOrCreateStation(position);
+                addCity(mirrorX(position));
+                getOrCreateStation(mirrorX(position));
+                break;
+            }
+        }
+    });
+
+    //state.cities.forEach(city => cutAllTreesNearCity(city));
+
+    for (let x = 0; x < 3; x++) {
+        for (let y = 0; y < 3; y++) {
+            let position = {
+                x: x * 600 + Math.random() * 300,
+                y: y * 400 + Math.random() * 200
+            }
+            
+            let size = 30;
+
+            let xAmount = 2 + Math.random() * 2;
+            let yAmount = 1 + Math.random() * 2;
+            for (let smallX = 0; smallX < xAmount; smallX++) {
+                for (let smallY = 0; smallY < yAmount   ; smallY++) {
+                    let realPosition = {
+                        x: position.x + smallX * size * 1.1 + size * (Math.random() * 0.15),
+                        y: position.y + smallY * size * 1.1 + size * (Math.random() * 0.15)
+                    };
+
+                    let realSize = size * Math.random() * 0.1 + size * 0.9;
+
+                    if (!isWater(realPosition, realSize) && !isSnow(realPosition, realSize) && !isMountain(realPosition, realSize) && !getCity(realPosition, realSize + SUCTION_RADIUS)) {
+                        addField(realPosition, realSize);
+                        cutTreesNear(realPosition, realSize * 1.3);
+                        addField(mirrorX(realPosition), realSize);
+                        cutTreesNear(mirrorX(realPosition), realSize * 1.3);
+                    }
+                }
+            } 
+
+            
+        }
+    }
+
+    setView();
+    requestAnimationFrame(loop);
+</script>
