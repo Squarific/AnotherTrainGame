@@ -8,12 +8,6 @@
         <img src="images/rail.png">
         <span class="rail-budget-text">0</span>
     </div>
-    
-    <!--
-    <div class="budget-container">
-        <img src="images/station.png">
-        <span class="station-budget-text">0</span>
-    </div>-->
 </div>
 
 <div class="middle-top ui-container">
@@ -25,6 +19,17 @@
 <div class="right-arrow ui-button">&gt</div>
 
 <div class="speedcontainer">1x</div>
+
+<div class="choices">
+    <div onclick="chooseField()" class="choice">🌾</div>
+    <div onclick="chooseCity()" class="choice">🏙️</div>
+    <div onclick="chooseForest()" class="choice">🌳</div>
+    <div onclick="chooseMountain()" class="choice">🏔️</div>
+    <div onclick="chooseRail()" class="choice"><img src="images/rail.png"></div>
+</div>
+
+<div class="right-bottom ui-button idea">💡</div>
+
 <style>
     html, body {
         margin: 0 !important;
@@ -37,6 +42,46 @@
 
     canvas {
         position:absolute;
+    }
+
+    .choices {
+        position:absolute;
+        left:0;
+        right:0;
+        bottom:0;
+        top:0;
+        background:#000000c4;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+    }
+
+    .choice {
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        width:150px;
+        height:150px;
+        background:#dcd2df;
+        margin:20px;
+        cursor:pointer;
+        font-size:64px;
+        text-align: center;
+        color:#353037;
+    }
+
+    .choice:hover {
+        background:#bfb3c3;
+    }
+
+    .choice img {
+        height:64px;
+    }
+
+    .right-bottom {
+        position:absolute;
+        right:16px;
+        bottom:16px;
     }
 
     .left-top-container {
@@ -75,6 +120,7 @@
         position: absolute;
         right:0;
         top:50%;
+        display:none;
     }
     
     .left-arrow {
@@ -82,9 +128,11 @@
         left:0;
         top:50%;
         opacity: 0.2;
+        display:none;
     }
 
     .speedcontainer {
+        display:none;
         position:absolute;
         right:16px;
         top:16px;
@@ -105,7 +153,6 @@
     }
 
     .ui-container {
-        display:inline-block;
         box-sizing: border-box;
         padding:16px;
 
@@ -140,7 +187,7 @@
         fields: [],
         industries: [],
 
-        railBudget: 15,
+        railBudget: 0,
         stationBudget: 15,
 
         lastClickedPoint: undefined,
@@ -205,6 +252,9 @@
     let populationText = document.querySelector(".population-text");
     let stationBudgetText = document.querySelector(".station-budget-text");
     let speedContainer = document.querySelector(".speedcontainer");
+
+    let choices = document.querySelector(".choices");
+    let idea = document.querySelector(".idea");
     
     // Functions
     function setView () {
@@ -262,8 +312,15 @@
     function loop () {
         update();
         railBudgetText.textContent = state.railBudget;
-        populationText.textContent = state.cities.reduce((accumulator, element) => accumulator + element.size, 0);
-        //stationBudgetText.textContent = state.stationBudget;
+
+        if (state.railBudget == 0) railBudgetText.parentNode.style.display = "none";
+        else railBudgetText.parentNode.style.display = "";
+
+        let population = state.cities.reduce((accumulator, element) => accumulator + element.size, 0);
+        populationText.textContent = population;
+
+        if (population == 0) populationText.parentNode.style.display = "none";
+        else populationText.parentNode.style.display = "";
 
         if (state.redrawBackground) drawBackground();
         drawOverlay();
@@ -444,22 +501,13 @@
 
     function drawFields () {
         state.fields.forEach(field => {
-            //let ratio = clamp((state.tick - field.lastResourceGathered) / FIELD_COOLDOWN_TICKS, 0, 1);
             let available = state.tick - field.lastResourceGathered > FIELD_COOLDOWN_TICKS;
 
             overlayContext.beginPath();
             overlayContext.moveTo(field.position.x, field.position.y);
-            overlayContext.rect(field.position.x - field.size / 2, field.position.y - field.size / 2, field.size, field.size);
+            overlayContext.rect(field.position.x - field.size, field.position.y - field.size, field.size * 2, field.size * 2);
             overlayContext.fillStyle = available ? '#e1be04' : "#9b5e1f";
             overlayContext.fill();
-
-            /*overlayContext.beginPath();
-            overlayContext.moveTo(field.position.x, field.position.y);
-            overlayContext.rect(field.position.x - field.size / 2, field.position.y - field.size / 2, field.size, ratio * field.size);
-            overlayContext.fillStyle = '#e1be04';
-            overlayContext.fill();*/
-
-
         });
     }
 
@@ -1100,7 +1148,7 @@
             y: Math.round(50 + forestPosition.y + (Math.random() - 0.5) * offset),
         };
 
-        if (!isWater(position, TREE_RADIUS) && !isSnow(position, TREE_RADIUS) && !isMountain(position, TREE_RADIUS)) {
+        if (!isOccupied(position, TREE_RADIUS * 2)) {
             addTree(position);
         }
     }
@@ -1110,6 +1158,17 @@
 
         for (var i = 0; i < state.industries.length; i++) {
             if (distance(state.industries[i].position, position) < size)
+                return true;
+        }
+
+        return false;
+    }
+
+    function isField (position, size) {
+        if (!size) size = 0;
+
+        for (var i = 0; i < state.fields.length; i++) {
+            if (distance(state.fields[i].position, position) < state.fields[i].size + size)
                 return true;
         }
 
@@ -1149,12 +1208,42 @@
         return false;
     }
 
+    function isOccupied (position, size) {
+        return isWater(position, size) || isMountain(position, size) || isSnow(position, size) || isCity(position, size) || isField(position, size) || isIndustry(position, size);
+    }
+
     function keydown (event) {
         if(event.key == "Escape") {
             state.addingRails = false;
-        } else if (event.key == " ") {
-            state.viewCoords = { x: 0, y: 0 };
-            state.redrawBackground = true;
+        }
+    }
+
+    function addSnowedMountain (clusterCenter, sizeModifier) {
+        let mountainAmount = 10 + sizeModifier * 20;
+        for (let i = 0; i < mountainAmount; i++) {
+            let position = {
+                x: Math.round(clusterCenter.x + (Math.random() - 0.5) * i * 2),
+                y: Math.round(clusterCenter.y + (Math.random() - 0.5) * i * 3),
+            };
+
+            let size = mountainAmount / 1.5 - (i / 2);
+            if (!isWater(position, size) && !isCity(position, size) && !isField(position, size) && !isIndustry(position, size)) {
+                addMountain(position, size);
+            }
+        }
+
+        let snowAmount = sizeModifier * 10;
+        for (let i = 0; i < snowAmount; i++) {
+            let position = {
+                x: Math.round(clusterCenter.x + (Math.random() - 0.5) * i * 3),
+                y: Math.round(clusterCenter.y + (Math.random() - 0.5) * i * 4.5),
+            };
+
+            let size = (snowAmount / 1.5) - (i / 2) + Math.random() * 5;
+
+            if (!isWater(position, size) && !isCity(position, size) && !isField(position, size) && !isIndustry(position, size) && isMountain(position, size)) {
+                addSnow(position, size);
+            }
         }
     }
 
@@ -1173,14 +1262,6 @@
         state.targetCoords.x += window.innerWidth / 2;
         state.targetTime = Date.now();
         state.redrawBackground = true;
-    });
-
-    overlayCanvas.addEventListener("mouseup", (event) => {
-        state.movingView = false;
-    });
-
-    overlayCanvas.addEventListener("mouseleave", (event) => {
-        state.movingView = false;
     });
 
     overlayCanvas.addEventListener("click", (event) => {
@@ -1204,165 +1285,68 @@
         speedContainer.innerHTML = state.speed + "x";
     });
 
-    // init
-    function mirrorX (position) {
-        return {
-            x: MIRROR_X - (position.x - MIRROR_X),
-            y: MIRROR_Y - (position.y - MIRROR_Y)
-        }
-    }
+    function chooseField () {
+        let position = {
+            x: 100 + Math.random() * 1000,
+            y: 100 + Math.random() * 800
+        };
 
-    // Add some mountains
-    for (let clusterX = 1; clusterX < 5; clusterX++) {
-        for (let clusterY = 0; clusterY < 4; clusterY++) {
-            let clusterCenter = {
-                x: 1300 + clusterX * 300 + Math.random() * 200,
-                y: 25 + clusterY * 300 + Math.random() * 200
-            };
+        let size = 15;
+        let xAmount = 1 + Math.floor(Math.random() * 3);
+        let yAmount = 1 + Math.floor(Math.random() * 3);
 
-            let sizeModifier = 4 - Math.abs(clusterX - 4);
-            let mountainAmount = 10 + sizeModifier * 20;
-            for (let i = 0; i < mountainAmount; i++) {
-                let position = {
-                    x: Math.round(clusterCenter.x + (Math.random() - 0.5) * i * 2),
-                    y: Math.round(clusterCenter.y + (Math.random() - 0.5) * i * 3),
+        for (let smallX = 0; smallX < xAmount; smallX++) {
+            for (let smallY = 0; smallY < yAmount   ; smallY++) {
+                let realPosition = {
+                    x: position.x + smallX * size * 1.1 + size * (Math.random() * 0.15),
+                    y: position.y + smallY * size * 1.1 + size * (Math.random() * 0.15)
                 };
 
-                let size = mountainAmount / 1.5 - (i / 2);
-                if (!isWater(position, size)) {
-                    addMountain(position, size);
-                    addMountain(mirrorX(position), size);
-                }
-            }
+                let realSize = size * Math.random() * 0.1 + size * 0.9;
 
-            let snowAmount = sizeModifier * 10;
-            for (let i = 0; i < snowAmount; i++) {
-                let position = {
-                    x: Math.round(clusterCenter.x + (Math.random() - 0.5) * i * 3),
-                    y: Math.round(clusterCenter.y + (Math.random() - 0.5) * i * 4.5),
-                };
-
-                let size = (snowAmount / 1.5) - (i / 2) + Math.random() * 5;
-
-                if (!isWater(position, size) && isMountain(position, size)) {
-                    addSnow(position, size);
-                    addSnow(mirrorX(position), size);
+                if (!isOccupied(realPosition, realSize)) {
+                    addField(realPosition, realSize);
+                    cutTreesNear(realPosition, realSize * 2);
                 }
             }
         }
+
+        choices.style.display = "none";
     }
 
-    // Add some water
-    for (let clusterX = 0; clusterX < 4; clusterX++) {
-        for (let clusterY = 0; clusterY < 3; clusterY++) {
-            let clusterCenter = {
-                x: clusterX * 400 + Math.random() * 250,
-                y: clusterY * 400 + Math.random() * 250
-            };
+    function chooseCity () {
+        addCity({
+            x: 100 + Math.random() * 1000,
+            y: 100 + Math.random() * 800
+        }, Math.floor(40 + Math.random() * 20));
 
-            let xShape = 0.7 + Math.random() / 2;
-            let yShape = 0.7 + Math.random() / 2;
-            let lakeSize = 50 + Math.random() * 90;
-
-            for (let i = 0; i < lakeSize; i++) {
-                let position = {
-                    x: Math.round(clusterCenter.x + (Math.random() - 0.5) * i * xShape),
-                    y: Math.round(clusterCenter.y + (Math.random() - 0.5) * i * yShape),
-                };
-
-                let size = 30 - (i / 5);
-                if (!isMountain(position, size) && !isSnow(position, size)) {
-                    addWater(position, size);
-                    addWater(mirrorX(position), size);
-                }
-            }
-        }
+        choices.style.display = "none";
     }
 
-    // Add some trees
-    for (let clusterX = 0; clusterX < 10; clusterX++) {
-        for (let clusterY = 0; clusterY < 5; clusterY++) {
-            let clusterCenter = {
-                x: clusterX * 275 + Math.random() * 175,
-                y: clusterY * 210 + Math.random() * 100
-            };
-
-            let size = 10 + clusterX * 20;
-            addForest(clusterCenter, size);
-            addForest(mirrorX(clusterCenter), size);
-        }
+    function chooseRail () {
+        state.railBudget += 10;
+        
+        choices.style.display = "none";
     }
 
-    let position = {
-        x: 600,
-        y: 600
+    function chooseForest () {
+        addForest({
+            x: 100 + Math.random() * 1000,
+            y: 100 + Math.random() * 800
+        }, 50 + Math.random() * 100);
+
+        choices.style.display = "none";
     }
 
-    addIndustry(position, ["🌳"], ["LUMBER"]);
-    addIndustry(mirrorX(position), ["🌳"], ["LUMBER"])
-
-    let cityPositions = [
-        { x: 100, xVar: 200, y: 120, yVar: 200},
-        { x: 100, xVar: 300, y: 500, yVar: 300},
-        { x: 250, xVar: 150, y: 200, yVar: 200},
-        { x: 500, xVar: 150, y: 150, yVar: 200},
-        { x: 500, xVar: 200, y: 600, yVar: 150},
-        { x: 1200, xVar: 250, y: 600, yVar: 200},
-        { x: 1200, xVar: 250, y: 300, yVar: 200},
-    ];
-
-    // Add some cities
-    cityPositions.forEach((pos) => {
-        for (var i = 0; i < 10; i++) {
-            let position = {
-                x: Math.round(pos.x + Math.random() * pos.xVar),
-                y: Math.round(pos.y + Math.random() * pos.yVar)
-            };
-
-            if (!isWater(position) && !isSnow(position, 10) && !isMountain(position) && !getCity(position, SUCTION_RADIUS * 2) && !isIndustry(position, SUCTION_RADIUS)) {
-                addCity(position);
-                getOrCreateStation(position);
-                addCity(mirrorX(position));
-                getOrCreateStation(mirrorX(position));
-                break;
-            }
-        }
-    });
-
-    //state.cities.forEach(city => cutAllTreesNearCity(city));
-
-    for (let x = 0; x < 3; x++) {
-        for (let y = 0; y < 3; y++) {
-            let position = {
-                x: x * 600 + Math.random() * 300,
-                y: y * 400 + Math.random() * 200
-            }
-            
-            let size = 30;
-
-            let xAmount = 2 + Math.random() * 2;
-            let yAmount = 1 + Math.random() * 2;
-            for (let smallX = 0; smallX < xAmount; smallX++) {
-                for (let smallY = 0; smallY < yAmount   ; smallY++) {
-                    let realPosition = {
-                        x: position.x + smallX * size * 1.1 + size * (Math.random() * 0.15),
-                        y: position.y + smallY * size * 1.1 + size * (Math.random() * 0.15)
-                    };
-
-                    let realSize = size * Math.random() * 0.1 + size * 0.9;
-
-                    if (!isWater(realPosition, realSize) && !isSnow(realPosition, realSize) && !isMountain(realPosition, realSize) && !getCity(realPosition, realSize + SUCTION_RADIUS)) {
-                        addField(realPosition, realSize);
-                        cutTreesNear(realPosition, realSize * 1.3);
-                        addField(mirrorX(realPosition), realSize);
-                        cutTreesNear(mirrorX(realPosition), realSize * 1.3);
-                    }
-                }
-            } 
-
-            
-        }
+    function chooseMountain () {
+        addSnowedMountain({
+            x: 100 + Math.random() * 1000,
+            y: 100 + Math.random() * 800
+        }, Math.random() * 4 + 1);
     }
+
+    idea.addEventListener("click", () => choices.style.display = "");
+    choices.style.display = "none";
 
     setView();
     requestAnimationFrame(loop);
