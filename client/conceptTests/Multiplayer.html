@@ -1,0 +1,685 @@
+<head>
+    <meta charset="UTF-8">
+</head>
+
+<canvas id="background"></canvas>
+<canvas id="overlay"></canvas>
+
+<div class="left-top-container">
+    <div class="budget-container ui-container">
+        <img src="images/rail.png">
+        <span class="rail-budget-text">0</span>
+    </div>
+</div>
+
+<style>
+    html, body {
+        margin: 0 !important;
+        padding: 0 !important;
+        max-width:100%;
+        max-height:100%;
+        background:#45b329;
+        font-family: fantasy;
+    }
+
+    canvas {
+        position:absolute;
+    }
+
+    .choices {
+        position:absolute;
+        left:0;
+        right:0;
+        bottom:0;
+        top:0;
+        background:#000000c4;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+    }
+
+    .choice {
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        width:150px;
+        height:150px;
+        background:#dcd2df;
+        margin:20px;
+        cursor:pointer;
+        font-size:64px;
+        text-align: center;
+        color:#353037;
+    }
+
+    .choice:hover {
+        background:#bfb3c3;
+    }
+
+    .choice img {
+        height:64px;
+    }
+
+    .right-bottom {
+        position:absolute;
+        right:16px;
+        bottom:16px;
+    }
+
+    .left-top-container {
+        position:absolute;
+        top:16px;
+        left:16px;
+    }
+
+    .middle-top {
+        position:absolute;
+        top:16px;
+        left:50%;
+        transform:translate(-50%);
+    }
+
+    .ui-button {
+        display:inline-block;
+        box-sizing: border-box;
+        padding:16px;
+
+        cursor:pointer;
+
+        font-weight: bold;
+        color:#d7d7d7;
+        font-size:32px;
+
+        background:#353333c9;
+        box-shadow: 0px 3px 15px rgba(0,0,0,0.2);
+
+        -webkit-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+    }
+
+    .ui-container {
+        box-sizing: border-box;
+        padding:16px;
+
+        font-weight: bold;
+        color:#d7d7d7;
+        font-size:32px;
+
+        background:#353333c9;
+        box-shadow: 0px 3px 15px rgba(0,0,0,0.2);
+    }
+
+    .budget-container img {
+        height: 36px;
+        vertical-align: top;
+    }
+</style>
+<script src='shared.js'></script>
+<script>
+    let reconnect_seconds = 2;
+    let socket;
+    
+    /*
+    SOCKET
+    */
+    function connect () {
+        socket = new WebSocket('ws://localhost:8080');
+        
+        socket.onmessage = (m) => {
+            console.log("Socket: " + m.data);
+            receiveMessage(m);
+        };
+        
+        socket.onopen = () => {
+            console.log("Socket established");
+            reconnect_seconds = 2;
+        };
+        
+        socket.onclose = function(e) {
+            console.log('Socket is closed. Reconnect will be attempted in ' + reconnect_seconds + ' seconds.', e.reason);
+            
+            setTimeout(function() {
+                connect();
+                
+                reconnect_seconds *= 2;
+                if (reconnect_seconds > 10 * 60) reconnect_seconds = 10 * 60;
+            }, reconnect_seconds * 1000);
+        };
+        
+        socket.onerror = function(err, err2) {
+            console.error('Socket encountered error: ', err.message, 'Closing socket');
+            socket.close();
+        };
+    }
+
+    function receiveMessage (message) {
+        if (!CONSTANTS) CONSTANTS = JSON.parse(message);
+    }
+
+    connect();
+</script>
+<script>
+    let CONSTANTS;
+
+    // Globals
+    let worldState = {
+        speed: 1,
+        rails: [],
+        trees: [],
+        water: [],
+        cities: [],
+        mountains: [],
+        snow: [],
+        stations: [],
+        transports: [],
+        forests: [],
+        fields: [],
+        industries: [],
+
+        lastTick: Date.now(),
+        tick: 0,
+    };
+
+    let clientState = {
+        lastClickedPoint: undefined,
+        lastCursorPosition: undefined,
+        addingRails: false,
+
+        redrawBackground: true,
+
+        viewCoords: { x: 0, y: 0 },
+        zoom: 1,
+
+        railBudget: 15,
+    };
+
+    const IMAGES = {
+        "🏔️": "images/boulder.png",
+        "LUMBER": "images/lumber.png",
+        "🌳":"images/tree.png"
+    };
+
+    for (var key in IMAGES) {
+        let img = new Image();
+        img.src = IMAGES[key];
+        IMAGES[key] = img;
+    }
+
+    let backgroundCanvas = document.querySelector("#background");
+    let backgroundContext = backgroundCanvas.getContext("2d");
+
+    let overlayCanvas = document.querySelector("#overlay");
+    let overlayContext = overlayCanvas.getContext("2d");
+
+    let railBudgetText = document.querySelector(".rail-budget-text");
+
+    // Functions
+    function setView () {
+        backgroundCanvas.width = window.innerWidth;
+        backgroundCanvas.height = window.innerHeight;
+        overlayCanvas.width = window.innerWidth;
+        overlayCanvas.height = window.innerHeight;
+    
+        clientState.redrawBackground = true;
+        clientState.zoom = window.innerHeight / 1000;
+    }
+
+    function drawBackground () {
+        backgroundContext.setTransform(1, 0, 0, 1, 0, 0);
+        backgroundContext.clearRect(0, 0, backgroundCanvas.width, backgroundCanvas.height);
+        backgroundContext.scale(clientState.zoom, clientState.zoom);
+        backgroundContext.translate(-clientState.viewCoords.x, -clientState.viewCoords.y);
+
+        drawWater();
+        drawMountains();
+        drawSnow();
+        drawTrees();
+
+        clientState.redrawBackground = false;
+    }
+
+    function loop () {
+        railBudgetText.textContent = clientState.railBudget;
+
+        if (clientState.railBudget == 0) railBudgetText.parentNode.style.display = "none";
+        else railBudgetText.parentNode.style.display = "";
+
+        if (clientState.redrawBackground) drawBackground();
+        drawOverlay();
+
+        requestAnimationFrame(loop);
+    }
+
+    function drawOverlay () {
+        overlayContext.setTransform(1, 0, 0, 1, 0, 0);
+        overlayContext.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+        overlayContext.scale(clientState.zoom, clientState.zoom);
+        overlayContext.translate(-clientState.viewCoords.x, -clientState.viewCoords.y);
+        
+        drawFields();
+        drawCities();
+        drawIndustries();
+        drawRails();
+        drawStations();
+        drawTransports();
+        drawIndustryDetails();
+        drawCityDetails();
+        drawCurrentRail();
+    }
+
+    function clamp (value, min, max) {
+        return Math.max(Math.min(value, max), min);
+    }
+
+    function drawTransports () {
+        overlayContext.beginPath();
+        worldState.transports.forEach(transport => {
+            if (IMAGES[transport.type]) return drawTransport(transport);
+
+            overlayContext.font = "bold 14px Arial";
+            overlayContext.fillStyle = '#292828';
+            var size = overlayContext.measureText(transport.type);
+            var height = size.actualBoundingBoxAscent + size.actualBoundingBoxDescent;
+            overlayContext.fillText(transport.type, transport.position.x - size.width / 2, transport.position.y + height / 2);
+        });
+        overlayContext.fill();
+    }
+
+    function drawTransport (transport) {
+        overlayContext.drawImage(
+            IMAGES[transport.type],
+            transport.position.x - TRANSPORT_SIZE / 2,
+            transport.position.y - TRANSPORT_SIZE / 2,
+            TRANSPORT_SIZE,
+            TRANSPORT_SIZE
+        );
+    }
+
+    function drawCities () {
+        overlayContext.beginPath();
+        worldState.cities.forEach(city => {
+            overlayContext.moveTo(city.position.x, city.position.y);
+            overlayContext.arc(city.position.x, city.position.y, Math.min(Math.sqrt(city.size), 30), 0, 2 * Math.PI, false);
+        });
+        overlayContext.fillStyle = '#b1b7b0';
+        overlayContext.fill();
+    }
+
+    function drawIndustries () {
+        overlayContext.beginPath();
+        worldState.industries.forEach(industry => {
+            overlayContext.rect(industry.position.x - 8, industry.position.y - 8, 16, 16);
+        });
+        overlayContext.fillStyle = '#634949';
+        overlayContext.fill();
+    }
+
+    function drawIndustryDetails () {
+        overlayContext.beginPath();
+        worldState.industries.forEach(industry => {
+            let offers = countElements(industry.offers);
+            let requests = countElements(industry.requests);
+
+            for (var resource in offers) {
+                overlayContext.drawImage(IMAGES[resource], industry.position.x - 10, industry.position.y - 20 - 15, 20, 20);
+            }
+
+            for (var resource in requests) {
+                overlayContext.drawImage(IMAGES[resource], industry.position.x - 10, industry.position.y + 20, 20, 20);
+            }
+
+            overlayContext.font = "bold 20px Arial";
+            overlayContext.fillStyle = 'white';
+            overlayContext.fillText(industry.requests.length > 0 ? "?" : "", industry.position.x + 10, industry.position.y + 36);
+            overlayContext.fillText(industry.offers.length > 0 ? "?" : "", industry.position.x + 10, industry.position.y - 20);
+        });
+        overlayContext.fill();
+    }
+
+    function countElements (array) {
+        let elements = {};
+        array.forEach((e) => {elements[e] = elements[e] || 0; elements[e]++});
+        return elements;
+    }
+
+    function countElementsAsString (array) {
+        let elements = {};
+        let stringArray = [];
+        array.forEach((e) => {elements[e] = elements[e] || 0; elements[e]++});
+        for (var e in elements) {
+            if (elements[e] == 1) stringArray.push(e);
+            else if (elements[e] == 2) stringArray.push(e + e);
+            else stringArray.push(elements[e] + e);
+        }
+        return stringArray.join(" ");
+    }
+
+    function drawCityDetails () {
+        overlayContext.beginPath();
+        worldState.cities.forEach(city => {
+            let offerText = city.size + "🧑";
+            let requestText = city.requests.length > 0 ? countElementsAsString(city.requests) + "?" : "";
+            overlayContext.font = "bold 20px Arial";
+            overlayContext.fillStyle = 'white';
+            overlayContext.fillText(offerText, city.position.x - (overlayContext.measureText(offerText).width / 2), city.position.y - 5 - Math.min(Math.sqrt(city.size), 30));
+            overlayContext.fillText(requestText, city.position.x - (overlayContext.measureText(requestText).width / 2), city.position.y + 14 + Math.min(Math.sqrt(this.size), 30));
+        });
+        overlayContext.fill();
+    }
+
+    function drawSnow () {
+        backgroundContext.beginPath();
+        worldState.snow.forEach(snow => {
+            backgroundContext.moveTo(snow.position.x, snow.position.y);
+            backgroundContext.arc(snow.position.x, snow.position.y, snow.size, 0, 2 * Math.PI, false);
+            backgroundContext.fillStyle = 'white';
+        });
+        backgroundContext.fill();
+    }
+
+    function drawMountains () {
+        backgroundContext.beginPath();
+        worldState.mountains.forEach(mountain => {
+            backgroundContext.moveTo(mountain.position.x, mountain.position.y);
+            backgroundContext.arc(mountain.position.x, mountain.position.y, mountain.size, 0, 2 * Math.PI, false);
+            backgroundContext.fillStyle = '#827b83';
+        });
+        backgroundContext.fill();
+    }
+
+    function drawTrees () {
+        backgroundContext.beginPath();
+        worldState.trees.forEach(tree => {
+            backgroundContext.moveTo(tree.position.x, tree.position.y);
+            backgroundContext.arc(tree.position.x, tree.position.y, TREE_RADIUS, 0, 2 * Math.PI, false);
+            backgroundContext.fillStyle = '#2f771d';
+        });
+        backgroundContext.fill();
+    }
+
+    function drawFields () {
+        worldState.fields.forEach(field => {
+            let available = worldState.tick - field.lastResourceGathered > FIELD_COOLDOWN_TICKS;
+
+            overlayContext.beginPath();
+            overlayContext.moveTo(field.position.x, field.position.y);
+            overlayContext.rect(field.position.x - field.size, field.position.y - field.size, field.size * 2, field.size * 2);
+            overlayContext.fillStyle = available ? '#e1be04' : "#9b5e1f";
+            overlayContext.fill();
+        });
+    }
+
+    function drawWater () {
+        backgroundContext.beginPath();
+        worldState.water.forEach(water => {
+            backgroundContext.moveTo(water.position.x, water.position.y);
+            backgroundContext.arc(water.position.x, water.position.y, water.size, 0, 2 * Math.PI, false);
+            backgroundContext.fillStyle = '#03a9f4';
+        });
+        backgroundContext.fill();
+    }
+
+    function drawStations () {
+        overlayContext.beginPath();
+        worldState.stations.forEach(station => {
+            ratio = (RESOURCE_COLLECTION_COOLDOWN_TICKS - (worldState.tick - station.lastResourceGathered)) / RESOURCE_COLLECTION_COOLDOWN_TICKS;
+            if (ratio < 0) ratio = 0;
+            overlayContext.moveTo(station.position.x, station.position.y);
+            overlayContext.arc(station.position.x, station.position.y, RAIL_RADIUS + 4, 0, 2 * Math.PI * ratio, false);
+        });
+        overlayContext.fillStyle = 'white';
+        overlayContext.fill();
+
+        overlayContext.beginPath();
+        worldState.stations.forEach(station => {
+            overlayContext.moveTo(station.position.x, station.position.y);
+            overlayContext.arc(station.position.x, station.position.y, RAIL_RADIUS, 0, 2 * Math.PI, false);
+        });
+        overlayContext.fillStyle = '#282121';
+        overlayContext.fill();
+    }
+
+    function drawRails () {
+        overlayContext.beginPath();
+        worldState.rails.forEach(rail => {
+            overlayContext.moveTo(rail.from.position.x, rail.from.position.y);
+            overlayContext.lineTo(rail.to.position.x, rail.to.position.y);
+        });
+        overlayContext.lineWidth = 5;
+        overlayContext.setLineDash([20, 5]);
+        overlayContext.strokeStyle = '#282121';
+        overlayContext.stroke();
+    }
+
+    function drawSuctionZonesWithoutFill () {
+        overlayContext.beginPath();
+        worldState.stations.forEach(station => {
+            overlayContext.moveTo(station.position.x, station.position.y);
+            overlayContext.arc(station.position.x, station.position.y, SUCTION_RADIUS, 0, 2 * Math.PI, false);
+        });
+    }
+
+    function cursorPositionToWorldCoords (cursor) {
+        return {x: (cursor.x / clientState.zoom) + clientState.viewCoords.x, y: (cursor.y / clientState.zoom) + clientState.viewCoords.y };
+    }
+
+    function drawCurrentRail () {
+        if (!clientState.lastClickedPoint || !clientState.lastCursorPosition || !clientState.addingRails) return;
+
+        let from = snapToStationOrCity(clientState.lastClickedPoint);
+        let to = snapToStationOrCity(cursorPositionToWorldCoords(clientState.lastCursorPosition));
+
+        drawSuctionZonesWithoutFill();
+        overlayContext.moveTo(from.x, from.y);
+        overlayContext.arc(from.x, from.y, SUCTION_RADIUS, 0, 2 * Math.PI, false);
+        overlayContext.fillStyle = '#0000ff50';
+        overlayContext.fill();
+        overlayContext.beginPath();
+        overlayContext.moveTo(to.x, to.y);
+        overlayContext.arc(to.x, to.y, SUCTION_RADIUS, 0, 2 * Math.PI, false);
+        overlayContext.fillStyle = '#0000ff50';
+        overlayContext.fill();
+
+        overlayContext.beginPath();
+        overlayContext.moveTo(from.x, from.y);
+        overlayContext.lineTo(to.x, to.y);
+        overlayContext.lineWidth = 5;
+        overlayContext.setLineDash([20, 5]);
+        overlayContext.strokeStyle = !validNewRail(from, to) || clientState.railBudget < 1 ? 'red' : '#312828';
+        overlayContext.stroke();
+
+        overlayContext.beginPath();
+        overlayContext.moveTo(from.x, from.y);
+        overlayContext.arc(from.x, from.y, RAIL_RADIUS, 0, 2 * Math.PI, false);
+        overlayContext.fillStyle = isStation(from) || validNewStation(from) ? '#282121' : 'red';
+        overlayContext.fill();
+
+        let problemStation = getStation(from, MIN_DISTANCE_BETWEEN_CITIES);
+        if (!isStation(from) && problemStation) {
+            overlayContext.beginPath();
+            overlayContext.moveTo(problemStation.position.x, problemStation.position.y);
+            overlayContext.arc(problemStation.position.x, problemStation.position.y, SUCTION_RADIUS, 0, 2 * Math.PI, false);
+            overlayContext.fillStyle = '#ff000080';
+            overlayContext.fill();
+        }
+        
+        overlayContext.beginPath();
+        overlayContext.moveTo(to.x, to.y);
+        overlayContext.arc(to.x, to.y, RAIL_RADIUS, 0, 2 * Math.PI, false);
+        overlayContext.fillStyle = isStation(to) || validNewStation(to) ? '#282121' : 'red';
+        overlayContext.fill();
+
+        problemStation = getStation(to, MIN_DISTANCE_BETWEEN_CITIES);
+        if (!isStation(to) && problemStation) {
+            overlayContext.beginPath();
+            overlayContext.moveTo(problemStation.position.x, problemStation.position.y);
+            overlayContext.arc(problemStation.position.x, problemStation.position.y, SUCTION_RADIUS, 0, 2 * Math.PI, false);
+            overlayContext.fillStyle = '#ff000080';
+            overlayContext.fill();
+        }
+    }
+    
+    function snapToStationOrCity (point) {
+        for (let i = 0; i < worldState.stations.length; i++) {
+            let station = worldState.stations[i];
+            if (distance(station.position, point) < RAIL_RADIUS * 2) { return station.position; }
+        }
+
+        for (let i = 0; i < worldState.cities.length; i++) {
+            let city = worldState.cities[i];
+            if (distance(city.position, point) < city.renderSize() + RAIL_RADIUS) { return city.position; }
+        }
+        
+        return point;
+    }
+    
+    function isWater (position, size) {
+        if (!size) size = 0;
+
+        for (var i = 0; i < worldState.water.length; i++) {
+            if (distance(worldState.water[i].position, position) < worldState.water[i].size + size)
+                return true;
+        }
+
+        return false;
+    }
+
+    function isMountain (position, size) {
+        if (!size) size = 0;
+
+        for (var i = 0; i < worldState.mountains.length; i++) {
+            let mountain = worldState.mountains[i];
+            if (distance(mountain.position, position) < mountain.size + size)
+                return true;
+        }
+
+        return false;
+    }
+
+    function isSnow (position, size) {
+        if (!size) size = 0;
+        for (var i = 0; i < worldState.snow.length; i++) {
+            if (distance(worldState.snow[i].position, position) < worldState.snow[i].size + size)
+                return true;
+        }
+
+        return false;
+    }
+
+    function isCity (point) {
+        for (let i = 0; i < worldState.cities.length; i++) {
+            if (distance(point, worldState.cities[i].position) < 1) return true;
+        }
+
+        return false;
+    }
+
+    function isStation (point) {
+        for (let i = 0; i < worldState.stations.length; i++) {
+            if (distance(point, worldState.stations[i].position) < 1) return true;
+        }
+
+        return false;
+    }
+
+    function getStation (point, within) {
+        for (let i = 0; i < worldState.stations.length; i++) {
+            let station = worldState.stations[i];
+            if (distance(point, station.position) < (within || 1)) return station;
+        }
+    }
+
+    function validNewStation (point) {
+        if (isCity(point)) return true;
+        if (isWater(point) || (isMountain(point) && !isSnow(point))) return false;
+        if (getStation(point, MIN_DISTANCE_BETWEEN_CITIES)) return false;
+        return true;
+    }
+
+    function validNewRail (from, to) {
+        let fromIsStation = isStation(from);
+        let toIsStation = isStation(to);
+        let length = distance(from, to);
+
+        if (length > MAX_RAIL_LENGTH) return false;
+        if (!fromIsStation && !validNewStation(from)) return false;
+        if (!toIsStation && !validNewStation(to)) return false;
+
+        return true;
+    }
+
+    function distance (p1, p2) {
+        let a = p1.x - p2.x;
+        let b = p1.y - p2.y;
+        return Math.sqrt(a * a + b * b);
+    }
+
+    function getCursorPosition (canvas, event) {
+        const rect = canvas.getBoundingClientRect()
+        const x = event.clientX - rect.left
+        const y = event.clientY - rect.top
+        return { x, y };
+    }
+
+    function keydown (event) {
+        if(event.key == "Escape") {
+            clientState.addingRails = false;
+        }
+    }
+
+    function tryAddRail (from, to) {
+        from = snapToStationOrCity(from);
+        to = snapToStationOrCity(to);
+
+        if (!validNewRail(from, to)) return;
+
+        if (clientState.railBudget < 1) return;
+
+        let fromStation = getOrCreateStation(from);
+        let toStation = getOrCreateStation(to);
+
+        if (isConnected(fromStation, toStation)) return;
+
+        var newLength = worldState.rails.push({ from: fromStation, to: toStation });
+        fromStation.rails.push(worldState.rails[newLength - 1]);
+        toStation.rails.push(worldState.rails[newLength - 1]);
+        graph.addLink(nodeName(fromStation), nodeName(toStation), { distance: distance(fromStation.position, toStation.position )});
+        clientState.railBudget -= 1;
+    }
+
+    function validNewRail (from, to) {
+        let fromIsStation = isStation(from);
+        let toIsStation = isStation(to);
+        let length = distance(from, to);
+
+        if (length > MAX_RAIL_LENGTH) return false;
+        if (!fromIsStation && !validNewStation(from)) return false;
+        if (!toIsStation && !validNewStation(to)) return false;
+
+        return true;
+    }
+
+    // event listeners
+    window.addEventListener('resize', setView);
+    document.addEventListener('keydown', keydown);
+    document.addEventListener('contextmenu', event => event.preventDefault());
+
+    overlayCanvas.addEventListener("click", (event) => {
+        let cursor = getCursorPosition(overlayCanvas, event);
+        
+        if (clientState.addingRails) {
+            tryAddRail(clientState.lastClickedPoint, cursorPositionToWorldCoords(cursor));    
+        }
+
+        clientState.addingRails = !clientState.addingRails;
+        clientState.lastClickedPoint = cursorPositionToWorldCoords(cursor);
+    });
+
+    overlayCanvas.addEventListener("mousemove", () => {
+        clientState.lastCursorPosition = getCursorPosition(overlayCanvas, event);
+    });
+
+    setView();
+    requestAnimationFrame(loop);
+</script>
